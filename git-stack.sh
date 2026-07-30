@@ -1,5 +1,5 @@
 #!/bin/bash
-# git-stack.sh — Git operations across all cogen repos
+# git-stack.sh — Git operations across all repos
 #
 # Usage: ./scripts/git-stack.sh <command> [args]
 #
@@ -61,7 +61,7 @@ run_in_repo() {
   local name=$(basename "$repo")
 
   if [ "$repo" = "." ]; then
-    name="cogen-meta"
+    name=$(basename "$META_DIR")
   fi
 
   echo -e "\n${YELLOW}▶ $name${NC}"
@@ -99,7 +99,7 @@ cmd_dirty() {
       cd "$META_DIR/$repo"
       if ! git diff --quiet HEAD 2>/dev/null || ! git diff --cached --quiet 2>/dev/null; then
         local name=$(basename "$repo")
-        [ "$repo" = "." ] && name="cogen-meta"
+        [ "$repo" = "." ] && name=$(basename "$META_DIR")
         echo -e "${RED}✗ $name has uncommitted changes${NC}"
         dirty_count=$((dirty_count + 1))
       fi
@@ -149,7 +149,7 @@ cmd_summary() {
   for repo in "${REPOS[@]}"; do
     if [ -d "$META_DIR/$repo/.git" ]; then
       local name=$(basename "$repo")
-      [ "$repo" = "." ] && name="cogen-meta"
+      [ "$repo" = "." ] && name=$(basename "$META_DIR")
       if [ ${#name} -gt $max_name ]; then
         max_name=${#name}
       fi
@@ -165,7 +165,7 @@ cmd_summary() {
     if [ -d "$META_DIR/$repo/.git" ]; then
       cd "$META_DIR/$repo"
       local name=$(basename "$repo")
-      [ "$repo" = "." ] && name="cogen-meta"
+      [ "$repo" = "." ] && name=$(basename "$META_DIR")
       local branch=$(git branch --show-current 2>/dev/null || echo "N/A")
 
       # Use left-right count: output is "behind\tahead"
@@ -225,7 +225,7 @@ case "${1:-}" in
     cmd_commits "$2"
     ;;
   *)
-    echo "Git Stack Manager - Manage all cogen repositories"
+    echo "Git Stack Manager - Manage all repositories"
     echo ""
     echo "Usage: $0 <command> [args]"
     echo ""

@@ -8,7 +8,7 @@ cogen-meta, IDEAS, and render-stack-meta projects.
 Add as a git submodule at `.cl-make/`:
 
 ```bash
-git submodule add https://github.com/joelboehland/meta-common.git .cl-make
+git submodule add https://github.com/jolby/meta-common.git .cl-make
 git submodule update --init
 ```
 
