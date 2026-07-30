@@ -17,7 +17,7 @@
 #
 #   # Project-specific targets go here
 #   demo: check-quicklisp
-#   	$(SBCL_RUN) --eval '(my-project.demo:run)'
+#   	$(SBCL_QL) --eval '(my-project.demo:run)'
 #
 # Standard targets provided:
 #   help            Print this help
@@ -47,7 +47,8 @@
 #   SBCL                  SBCL binary (default: sbcl)
 #   SBCL_HOME             Custom SBCL_HOME for custom SBCL builds
 #   QL                    Quicklisp setup.lisp path
-#   SBCL_FLAGS            Additional SBCL flags
+#   ASDF_SOURCE_REGISTRY  Use source-registry tree scan (yes) or Quicklisp-only (no)
+#                         (default: yes; set to no for faster startup)
 
 # ── Shell setup ───────────────────────────────────────────────────────────
 SHELL := /bin/bash
@@ -71,6 +72,12 @@ SBCL ?= sbcl
 SBCL_HOME ?=
 QL ?= $(HOME)/quicklisp/setup.lisp
 CACHE_DIR ?= $(HOME)/.cache/common-lisp
+
+# When set to "no", skip the ASDF source registry tree scan entirely —
+# much faster startup when Quicklisp already knows all systems (demo,
+# dev cycles).  Keep the default "yes" for CI/fresh-build scenarios
+# where sibling repos may not be registered with Quicklisp.
+ASDF_SOURCE_REGISTRY ?= yes
 
 # ── Project directory detection ───────────────────────────────────────────
 # $(firstword $(MAKEFILE_LIST)) is the top-level Makefile that included us.
@@ -119,8 +126,18 @@ else
   SBCL_CMD := $(SBCL)
 endif
 
-# ── Derived convenience variable ──────────────────────────────────────────
-SBCL_RUN = $(SBCL_CMD) $(SBCL_FLAGS) $(QL_BOOT) $(ASDF_BOOT)
+# ── Derived convenience variables ─────────────────────────────────────────
+# SBCL_QL: lightweight — Quicklisp only, no ASDF source registry.
+#   Use for demos and fast dev cycles (~1-2s startup).
+SBCL_QL = $(SBCL_CMD) $(SBCL_FLAGS) --eval '(load "$(QL)")'
+
+# SBCL_RUN: full — Quicklisp + ASDF source registry for auto-discovering
+#   sibling repos.  Set ASDF_SOURCE_REGISTRY=no to use SBCL_QL instead.
+ifeq ($(ASDF_SOURCE_REGISTRY),no)
+  SBCL_RUN = $(SBCL_QL)
+else
+  SBCL_RUN = $(SBCL_CMD) $(SBCL_FLAGS) $(QL_BOOT) $(ASDF_BOOT)
+endif
 
 # ── Phony targets ─────────────────────────────────────────────────────────
 .PHONY: help load force-load load-summary test test-summary clean \
@@ -174,6 +191,7 @@ help:
 	@echo "  SBCL=<path>            Custom SBCL binary"
 	@echo "  SBCL_HOME=<path>       SBCL_HOME for custom SBCL builds"
 	@echo "  QL=<path>              Quicklisp setup.lisp"
+	@echo "  ASDF_SOURCE_REGISTRY=no  Skip source registry scan for faster startup"
 	@echo "  DYNAMIC_SPACE_SIZE=N   Heap size in MB (default: $(DYNAMIC_SPACE_SIZE))"
 
 # ── Load ──────────────────────────────────────────────────────────────────
@@ -218,9 +236,8 @@ load-summary:
 # Usage: make demo-<name>  →  loads system then runs dev/<name>.lisp
 # Example: make demo-sdl3  →  runs dev/sdl3.lisp
 #
-# Demo files receive the full SBCL_RUN boot (ASDF source registry +
-# Quicklisp already set up), so they just need (ql:quickload ...)
-# followed by their demo code.
+# Demo files use SBCL_QL (Quicklisp-only, no source registry scan) for
+# fast startup.  Projects that need sibling repos should use $(SBCL_RUN).
 demo-%: check-quicklisp check-sbcl
 	@test -f "dev/$*.lisp" || { \
 	  echo "Demo not found: dev/$*.lisp"; \
@@ -228,7 +245,7 @@ demo-%: check-quicklisp check-sbcl
 	  ls dev/*.lisp 2>/dev/null | sed 's/^/  /' || echo "  (none)"; \
 	  exit 1; \
 	}
-	@$(SBCL_RUN) \
+	@$(SBCL_QL) \
 	  --eval '(ql:quickload :$(PROJECT_SYSTEM))' \
 	  --load "dev/$*.lisp"
 
