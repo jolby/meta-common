@@ -19,6 +19,10 @@
 #   demo: check-quicklisp
 #   	$(SBCL_QL) --eval '(my-project.demo:run)'
 #
+#   # Custom test suite with output capture:
+#   test-integration: check-quicklisp
+#   	$(call capture-output,test-integration,$(SBCL_RUN) --eval '...')
+#
 # Standard targets provided:
 #   help            Print this help
 #   load            Quickload the system (for REPL exploration)
@@ -67,6 +71,10 @@ BINARY_NAME ?=
 INSTALL_DIR ?= $(HOME)/.local/bin
 TEST_OUTPUT ?= /tmp/$(subst /,-,$(PROJECT_SYSTEM))-test-LATEST.txt
 LOAD_OUTPUT ?= /tmp/$(subst /,-,$(PROJECT_SYSTEM))-load-LATEST.txt
+
+# Base directory prefix for captured output files.
+# Per-target capture goes to $(OUTPUT_DIR)<target>-LATEST.txt
+OUTPUT_DIR ?= /tmp/$(subst /,-,$(PROJECT_SYSTEM))-
 
 SBCL ?= sbcl
 SBCL_HOME ?=
@@ -139,6 +147,31 @@ else
   SBCL_RUN = $(SBCL_CMD) $(SBCL_FLAGS) $(QL_BOOT) $(ASDF_BOOT)
 endif
 
+# ── Output capture macro ──────────────────────────────────────────────────
+# Capture stdout+stderr of a command to a timestamped output file.
+# Pipefail (.SHELLFLAGS) ensures the exit code of the wrapped command
+# is preserved (not tee's).  Caller captures RC=$$? after invocation.
+#
+# Usage in project Makefiles:
+#
+#   test-special: check-quicklisp
+#   	$(call capture-output,test-special,$(SBCL_RUN) --eval '...')
+#   	@grep -E "Passed:|Failed:" $(OUTPUT_DIR)test-special-LATEST.txt | tail -1
+#
+#   demo-my-demo: check-quicklisp
+#   	$(call capture-output,demo-my-demo,$(SBCL_QL) --eval '...')
+#   	@echo "Output: $(OUTPUT_DIR)demo-my-demo-LATEST.txt"
+#
+# Output file: $(OUTPUT_DIR)<target>-LATEST.txt
+#
+# IMPORTANT: do not add a trailing blank line inside this define —
+# the ; \ continuation on the call line appends to the last recipe line.
+define capture-output
+	@rm -f $(OUTPUT_DIR)$(1)-LATEST.txt
+	@echo "=== $(PROJECT_SYSTEM) $(1) — $$$$(date -Iseconds) ===" | tee $(OUTPUT_DIR)$(1)-LATEST.txt
+	@$(2) 2>&1 | tee -a $(OUTPUT_DIR)$(1)-LATEST.txt
+endef
+
 # ── Phony targets ─────────────────────────────────────────────────────────
 .PHONY: help load force-load load-summary test test-summary clean \
         check-quicklisp check-sbcl \
@@ -198,11 +231,9 @@ help:
 # Captures stderr+stdout so errors are always inspectable via
 # make load-summary or direct inspection of $(LOAD_OUTPUT).
 load: check-quicklisp check-sbcl
-	@rm -f $(LOAD_OUTPUT)
-	@$(SBCL_RUN) \
+	$(call capture-output,load,$(SBCL_RUN) \
 	  --eval '(ql:quickload :$(PROJECT_SYSTEM))' \
-	  --eval '(format t "~%$(PROJECT_SYSTEM) loaded.~%")' \
-	  2>&1 | tee $(LOAD_OUTPUT); \
+	  --eval '(format t "~%$(PROJECT_SYSTEM) loaded.~")') ; \
 	RC=$$?; \
 	if grep -qE "caught (fatal )?(ERROR|WARNING)" $(LOAD_OUTPUT); then \
 	  echo "ERROR: Load had errors — see $(LOAD_OUTPUT) for details"; \
@@ -212,10 +243,8 @@ load: check-quicklisp check-sbcl
 
 force-load: check-quicklisp check-sbcl
 	@echo "Force-reloading $(PROJECT_SYSTEM)..."
-	@rm -f $(LOAD_OUTPUT)
-	@$(SBCL_RUN) \
-	  --eval '(ql:quickload :$(PROJECT_SYSTEM) :force t)' \
-	  2>&1 | tee $(LOAD_OUTPUT); \
+	$(call capture-output,force-load,$(SBCL_RUN) \
+	  --eval '(ql:quickload :$(PROJECT_SYSTEM) :force t)') ; \
 	RC=$$?; \
 	if grep -qE "caught (fatal )?(ERROR|WARNING)" $(LOAD_OUTPUT); then \
 	  echo "ERROR: Force-load had errors — see $(LOAD_OUTPUT) for details"; \
@@ -273,13 +302,10 @@ endif
 # output.  Stale output file deleted first so grep never sees old results.
 # Exit code preserved via pipefail.
 test: check-quicklisp check-sbcl
-	@rm -f $(TEST_OUTPUT)
-	@echo "=== $(PROJECT_SYSTEM) Tests — $$(date -Iseconds) ===" | tee $(TEST_OUTPUT)
-	@$(SBCL_RUN) \
+	$(call capture-output,test,$(SBCL_RUN) \
 	  --eval '(ql:quickload :$(PROJECT_SYSTEM) :force t)' \
 	  --eval '(ql:quickload :$(TEST_SYSTEM) :force t)' \
-	  --eval '(asdf:test-system :$(PROJECT_SYSTEM))' \
-	  2>&1 | tee -a $(TEST_OUTPUT); \
+	  --eval '(asdf:test-system :$(PROJECT_SYSTEM))') ; \
 	RC=$$?; \
 	echo "" | tee -a $(TEST_OUTPUT); \
 	echo "=== Exit: $$RC ===" | tee -a $(TEST_OUTPUT); \
