@@ -3,30 +3,27 @@
 Common Makefile, Lisp scripts, and shell tooling shared across
 cogen-meta, IDEAS, and render-stack-meta projects.
 
-## Usage
+→ **Full documentation:** [README.org](README.org)
 
-Add as a git submodule at `.cl-make/`:
+## Quick Start
 
 ```bash
-git submodule add https://github.com/jolby/meta-common.git .cl-make
+git submodule add git@github.com:jolby/meta-common.git .cl-make
 git submodule update --init
 ```
-
-Sub-repo Makefiles include:
 
 ```makefile
 PROJECT_SYSTEM := my-project
 include .cl-make/cl-project.mk
 ```
 
-Meta-repo shell scripts available at `.cl-make/git-stack.sh`, etc.
-
 ## Contents
 
 | File | Purpose |
 |------|---------|
-| `cl-project.mk` | Common Lisp project Makefile (load, test, clean, fresh-build, etc.) |
-| `fresh-build.lisp` | SBCL fresh-build script with condition capture |
+| `README.org` | Full documentation — targets, variables, scripts, design |
+| `cl-project.mk` | Common Lisp project Makefile |
+| `fresh-build.lisp` | SBCL fresh-build with condition capture |
 | `summarize-build.lisp` | Human-readable build output summarizer |
 | `parse-build-log.lisp` | Build log parser |
 | `start-mcp-server.lisp` | MCP server launcher |

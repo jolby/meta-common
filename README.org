@@ -1,0 +1,390 @@
+#+TITLE: meta-common — Shared Build Infrastructure
+#+STARTUP: showall
+
+Common Makefile, Lisp build scripts, and shell tooling shared across
+=cogen-meta=, =IDEAS=, and =render-stack-meta= projects.
+
+* Quick Start
+
+Add as a git submodule at =.cl-make/=:
+
+#+begin_src bash
+git submodule add git@github.com:jolby/meta-common.git .cl-make
+git submodule update --init
+#+end_src
+
+For a minimal project Makefile:
+
+#+begin_src makefile
+PROJECT_SYSTEM := my-project
+include .cl-make/cl-project.mk
+#+end_src
+
+That's it — you get =load=, =test=, =clean=, =fresh-build=, and more.
+
+* Makefile System (~cl-project.mk~)
+
+The centerpiece of =meta-common=. A GNU Make include that provides
+a standardized development workflow for any Common Lisp project.
+
+** Setup
+
+Include =cl-project.mk= after setting =PROJECT_SYSTEM= (the bare minimum):
+
+#+begin_src makefile
+PROJECT_SYSTEM := my-project
+include .cl-make/cl-project.mk
+#+end_src
+
+Full example with all overrides:
+
+#+begin_src makefile
+PROJECT_SYSTEM := my-project
+TEST_SYSTEM := my-project/tests            # default: PROJECT_SYSTEM/tests
+DYNAMIC_SPACE_SIZE := 8096                  # default: 4096 (MB)
+CLEAN_EXTRA_PATTERNS := *.db *.db-journal  # extra globs for make clean
+EXTRA_ASDF_DIRS := ../vendor/some-lib/     # additional ASDF registry dirs
+EXTRA_ASDF_TREES := ../dev/                # additional :tree source registry entries
+GOLDEN_PACKAGE := my-project.test           # enables generate-goldens target
+BINARY_NAME := my-cli                       # enables build/install targets
+ASDF_SOURCE_REGISTRY := no                 # skip slow :tree scan (use Quicklisp-only)
+include .cl-make/cl-project.mk
+
+# Project-specific targets go here
+demo: check-quicklisp
+	$(SBCL_QL) --eval '(my-project.demo:run)'
+#+end_src
+
+** Standard Targets
+
+| Target             | Description                                           |
+|--------------------+-------------------------------------------------------|
+| =make help=        | Print all available targets and override options      |
+| =make load=        | Quickload the system, capture output, check for errors |
+| =make force-load=  | Force-reload system (clears stale fasls)              |
+| =make load-summary= | Show warnings/errors from the last =make load=       |
+| =make test=        | Run tests, capture output, preserve exit code        |
+| =make test-summary= | Show test results from the last =make test=          |
+| =make clean=       | Remove fasls from source tree + SBCL cache           |
+| =make fresh-build= | Clear caches + build from scratch + capture conditions |
+| =make summarize=   | Human-readable summary of latest fresh-build output  |
+| =make build-report= | =fresh-build= + =summarize= (both passes)           |
+| =make demo-<name>= | Load system and run =dev/<name>.lisp=                |
+| =make build=       | Build binary → =bin/<name>= (requires =BINARY_NAME=) |
+| =make install=     | Install binary to =$(INSTALL_DIR)= (requires =BINARY_NAME=) |
+| =make generate-goldens= | Regenerate golden test files (requires =GOLDEN_PACKAGE=) |
+
+** Overrideable Variables
+
+| Variable               | Default                     | Description                                   |
+|------------------------+-----------------------------+-----------------------------------------------|
+| =PROJECT_SYSTEM=       | /required/                  | ASDF system name                              |
+| =TEST_SYSTEM=          | =PROJECT_SYSTEM=/tests       | ASDF test system                              |
+| =DYNAMIC_SPACE_SIZE=   | =4096=                      | SBCL heap size in MB                          |
+| =CLEAN_EXTRA_PATTERNS= | =*.db *.db-journal=         | Extra globs for =make clean=                  |
+| =EXTRA_ASDF_DIRS=      | /empty/                     | Additional dirs added to ASDF source registry |
+| =EXTRA_ASDF_TREES=     | /empty/                     | Additional =:tree= entries for source registry |
+| =GOLDEN_PACKAGE=       | /empty/                     | Enables =generate-goldens= target             |
+| =BINARY_NAME=          | /empty/                     | Binary output name (enables =build=/=install=) |
+| =INSTALL_DIR=          | =~/.local/bin=              | Install destination for =make install=        |
+| =SBCL=                 | =sbcl=                      | SBCL binary path                              |
+| =SBCL_HOME=            | /empty/                     | Custom SBCL_HOME for custom SBCL builds       |
+| =QL=                   | =~/quicklisp/setup.lisp=    | Quicklisp setup.lisp path                     |
+| =ASDF_SOURCE_REGISTRY= | =yes=                       | Set to =no= for faster Quicklisp-only startup |
+
+** SBCL Commands
+
+The Makefile provides two SBCL invocation patterns:
+
+- =$(SBCL_RUN)= — Full boot: Quicklisp + ASDF source registry tree scan.
+  Use for =load=, =test=, =build=, and =fresh-build= where sibling repo
+  discovery matters.  Set =ASDF_SOURCE_REGISTRY=no= to fall back to
+  Quicklisp-only (1-2s startup vs 15s+).
+
+- =$(SBCL_QL)= — Lightweight: Quicklisp only, no ASDF source registry.
+  Use for =demo-%/= targets, fast dev cycles, or any target that just
+  needs =ql:quickload=.  Always ~1-2s startup.
+
+Both respect =SBCL=, =SBCL_HOME=, =QL=, and =DYNAMIC_SPACE_SIZE= overrides.
+
+#+begin_src makefile
+# In your project Makefile:
+demo-todo: check-quicklisp
+	$(SBCL_QL) --eval '(ql:quickload :my-project/demo/todo)' \
+	           --eval '(my-project.demo.todo:run-todo-demo)'
+#+end_src
+
+** Output Capture (~capture-output~)
+
+The =capture-output= macro wraps any command with timestamped output
+capture to a predictable file:
+
+#+begin_example
+/tmp/<project>-<target>-LATEST.txt
+#+end_example
+
+Usage in project Makefiles:
+
+#+begin_src makefile
+demo-todo: check-quicklisp
+	$(call capture-output,demo-todo,$(SBCL_QL) \
+	  --eval '(ql:quickload :my-project/demo/todo)' \
+	  --eval '(my-project.demo.todo:run-todo-demo)')
+	@echo "Output: $(OUTPUT_DIR)demo-todo-LATEST.txt"
+
+test-integration: check-quicklisp
+	$(call capture-output,test-integration,$(SBCL_RUN) \
+	  --eval '(ql:quickload :my-project/integration-tests)' \
+	  --eval '(my-project.integration-tests:run)') ; \
+	RC=$$?; \
+	grep -E "Passed:|Failed:" $(OUTPUT_DIR)test-integration-LATEST.txt | tail -1; \
+	exit $$RC
+#+end_src
+
+The macro:
+- Deletes any previous output file for the same target.
+- Writes a timestamped header.
+- Captures both stdout and stderr via =tee=.
+- Preserves the exit code of the wrapped command (via pipefail).
+  Capture it with =RC=$$?= after the =$(call ...)= with a =; \= continuation.
+
+Standard targets =load=, =force-load=, and =test= use =capture-output= internally.
+=load-summary= and =test-summary= read from =$(LOAD_OUTPUT)= and =$(TEST_OUTPUT)=,
+which are derived from =$(OUTPUT_DIR)=.
+
+** Conditional Features
+
+*** Binary Build (=BINARY_NAME=)
+
+When =BINARY_NAME= is set, two additional targets become available:
+
+- =make build= — Builds a standalone binary via =asdf:make= → =bin/<name>=
+- =make install= — Copies =bin/<name>= to =$(INSTALL_DIR)=
+
+Example:
+
+#+begin_src makefile
+BINARY_NAME := my-cli
+include .cl-make/cl-project.mk
+#+end_src
+
+*** Golden File Generation (=GOLDEN_PACKAGE=)
+
+When =GOLDEN_PACKAGE= names a package with =*update-goldens*= and
+=*update-pixel-goldens*= specials, =make generate-goldens= becomes available.
+Runs the test suite with both variables set to =T=.
+
+Example:
+
+#+begin_src makefile
+GOLDEN_PACKAGE := stratodendron.test
+include .cl-make/cl-project.mk
+#+end_src
+
+** Fresh Build System
+
+=mk fresh-build= runs a fresh SBCL compilation of the entire project,
+capturing all compiler conditions (errors, warnings, style-warnings, notes)
+into a structured s-expression file under =<project>/tmp/fresh-build-<timestamp>.lisp=.
+
+=mk summarize= parses the latest fresh-build output and prints a human-readable
+summary: total condition counts, per-file heatmap, and samples per severity.
+
+=mk build-report= combines both in one command.
+
+** Adding Custom Targets
+
+Project-specific targets go /after/ the =include= line.  You can use any of
+the defined variables and macros:
+
+#+begin_src makefile
+PROJECT_SYSTEM := my-project
+include .cl-make/cl-project.mk
+
+# Fast demo with Quicklisp-only boot:
+demo-my-feature: check-quicklisp
+	$(SBCL_QL) --eval '(ql:quickload :my-project/demo/feature)' \
+	           --eval '(my-project.demo.feature:run)'
+
+# Custom test suite with output capture:
+test-smoke: check-quicklisp
+	$(call capture-output,test-smoke,$(SBCL_RUN) \
+	  --eval '(ql:quickload :my-project/smoke-tests)' \
+	  --eval '(my-project.smoke-tests:run)') ; \
+	RC=$$?; \
+	grep -E "Passed:|Failed:" $(OUTPUT_DIR)test-smoke-LATEST.txt | tail -1; \
+	exit $$RC
+
+# Custom clean-up:
+nuke: clean
+	rm -rf tmp/ node_modules/
+#+end_src
+
+* Shell Scripts
+
+Shell scripts live alongside =cl-project.mk= in =.cl-make/= (sub-repo level)
+and are also available at the meta-repo level for cross-repo operations.
+
+** ~git-stack.sh~ — Batch Git Operations
+
+Operates on all git repos under =repos/= plus the meta-repo itself.
+
+#+begin_example
+Usage: ./.cl-make/git-stack.sh <command> [args]
+
+Commands:
+  status          Show git status for all repos
+  log [n]         Show last n commits (default: 5)
+  push            Push all repos to origin
+  pull            Pull all repos from origin
+  dirty           Show which repos have uncommitted changes
+  sync            Sync all repos (pull then push)
+  summary         Summary of all repos (branch, commits ahead/behind)
+  commits <msg>   Commit all changes in all repos with message
+#+end_example
+
+#+begin_src bash
+# From a meta-repo root:
+./.cl-make/git-stack.sh status
+./.cl-make/git-stack.sh summary
+./.cl-make/git-stack.sh commits "feat: add new feature"
+#+end_src
+
+** ~new-worktree.sh~ — Create Isolated Worktrees
+
+Creates a git worktree under =worktrees/<project>--<branch-name>/= with
+metadata symlinks (=AGENTS.md=, =.beads/=).
+
+#+begin_src bash
+# Syntax: new-worktree.sh <project> <branch-name>
+./.cl-make/new-worktree.sh beadwork feature-labels
+# → worktrees/beadwork--feature-labels/
+#+end_src
+
+** ~list-worktrees.sh~ — List All Worktrees
+
+Lists active worktrees for all subprojects:
+
+#+begin_src bash
+./.cl-make/list-worktrees.sh
+#+end_src
+
+** ~remove-worktree.sh~ — Remove a Worktree
+
+Removes a worktree /with confirmation prompt/:
+
+#+begin_src bash
+# Syntax: remove-worktree.sh <project> <branch-name>
+./.cl-make/remove-worktree.sh beadwork feature-labels
+#+end_src
+
+** ~check-unicode.sh~ — Unicode Audit
+
+Scans Lisp source files for non-ASCII characters.  Defaults to =repos/*/src/=,
+accepts explicit directories:
+
+#+begin_src bash
+./.cl-make/check-unicode.sh                    # scan all repos' src/
+./.cl-make/check-unicode.sh repos/my-proj/src/ # scan specific dir
+#+end_src
+
+Exit 0 = clean.  Non-zero = found unicode (printed with =file:line:char=).
+
+* Lisp Scripts
+
+Lisp scripts are loaded by =cl-project.mk= targets and can also be run
+standalone with =sbcl --script=.
+
+** ~fresh-build.lisp~
+
+Clears Lisp fasl caches, builds the project from scratch, and captures
+all compiler conditions into structured output.
+
+#+begin_src bash
+sbcl --script .cl-make/fresh-build.lisp [project-dir]
+# Output: <project>/tmp/fresh-build-<timestamp>.lisp
+#+end_src
+
+Two-pass capture:
+1. =asdf:load-system= → load-time conditions (redefinitions, etc.)
+2. Re-compile each source file → compile-time conditions with file/line info
+   (uses ~sb-c::find-error-context~ for source positions).
+
+Exit codes: 0 = loaded ok (warnings tolerated), 1 = load failure.
+
+** ~summarize-build.lisp~
+
+Parses a fresh-build output file and prints a human-readable summary:
+total condition counts, per-file heatmap, samples per severity.
+
+#+begin_src bash
+sbcl --script .cl-make/summarize-build.lisp <fresh-build-file>
+#+end_src
+
+** ~parse-build-log.lisp~
+
+Parses SBCL compiler diagnostic lines from a =make load= output log into
+structured s-expressions — same format as =fresh-build.lisp=.
+
+#+begin_src bash
+sbcl --script .cl-make/parse-build-log.lisp <log-file>
+#+end_src
+
+Useful for CI or post-processing load output from project-specific targets.
+
+** ~start-mcp-server.lisp~
+
+Launches a =cl-mcp= HTTP server for MCP tool access.
+
+#+begin_src bash
+# Default: expects cl-mcp at ../vendor/cl-mcp/
+sbcl --script .cl-make/start-mcp-server.lisp
+
+# Override path:
+CL_MCP_ASD=/path/to/cl-mcp.asd sbcl --script .cl-make/start-mcp-server.lisp
+#+end_src
+
+The server listens on =http://127.0.0.1:3000/mcp=.
+
+* Updating ~.cl-make/~
+
+To pull the latest infrastructure updates:
+
+#+begin_src bash
+cd .cl-make && git pull origin main
+cd .. && git add .cl-make && git commit -m "Update .cl-make to latest"
+#+end_src
+
+Each sub-repo pins a specific commit of =meta-common=.  Updates are
+intentional and visible in git history.
+
+* Design Rationale
+
+** Why =.cl-make/= as a submodule?
+
+Inspired by GrammaTech's =SEL= project (=github.com/GrammaTech/cl-make.git=).
+A dot-prefixed directory signals "build infrastructure, not source."
+The submodule pattern gives each sub-repo an explicit, version-pinned
+dependency on the shared infrastructure.
+
+** Why two SBCL commands (=SBCL_RUN= vs =SBCL_QL=)?
+
+The ASDF source registry =:tree= scan over the parent directory discovers
+sibling repos automatically — essential for projects with inter-repo
+dependencies.  But the scan takes 10-15 seconds.  For demos, dev cycles,
+and targets that just call =ql:quickload=, the lightweight =SBCL_QL= gives
+1-2 second startup.  Best of both worlds.
+
+** Why pipefail?
+
+=.SHELLFLAGS := -o pipefail -c= ensures that when a command is piped
+through =tee=, the exit code of the /first/ command is preserved, not
+=tee='s exit code.  This lets =capture-output= and the =test= target
+accurately report pass/fail status even when output is captured.
+
+** Why output capture to ~/tmp/~?
+
+Predictable, globally unique file paths (=/tmp/<project>-<target>-LATEST.txt=).
+Never checked into git.  Easy to find (=ls /tmp/<project>-*=), easy to
+clean (reboot or =rm=).  The =LATEST= suffix means each target has exactly
+one historical output — no accumulation cruft.
