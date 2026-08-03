@@ -75,6 +75,8 @@ LOAD_OUTPUT ?= /tmp/$(subst /,-,$(PROJECT_SYSTEM))-load-LATEST.txt
 # Base directory prefix for captured output files.
 # Per-target capture goes to $(OUTPUT_DIR)<target>-LATEST.txt
 OUTPUT_DIR ?= /tmp/$(subst /,-,$(PROJECT_SYSTEM))-
+# Temp file for $(file ...) output — avoids shell quoting issues with --eval
+TEST_EVAL_TMP ?= /tmp/$(subst /,-,$(PROJECT_SYSTEM))-test-eval-tmp.lisp
 
 SBCL ?= sbcl
 SBCL_HOME ?=
@@ -332,22 +334,27 @@ ifdef PKG
 .PHONY: test-package
 test-package: check-quicklisp check-sbcl
 	$(call capture-output,test-package,$(SBCL_RUN) \
+	  --eval '(ql:quickload :$(PROJECT_SYSTEM) :force t)' \
 	  --eval '(ql:quickload :$(TEST_SYSTEM) :force t)' \
 	  --eval '(parachute:test $(PKG)$(if $(REPORT), :report (quote $(REPORT))))')
 endif
 
 # Run any test expression.  Works with any framework.
-#   make test-eval EVAL="(parachute:test :my-pkg :test-foo)"
+# Run any test expression.  Bypasses shell quoting via $(file).
+# Works with single quotes, double quotes, any Lisp form.
+#   make test-eval EVAL="(parachute:test :my-pkg 'some-sym)"
+#   make test-eval EVAL="(format t \"hello\")"
 #   make test-eval EVAL="(5am:run! :smoke)"
+ifeq (,$(EVAL))
+  $(error EVAL is required. Usage: make test-eval EVAL="(form)")
+endif
 .PHONY: test-eval
 test-eval: check-quicklisp check-sbcl
-	@test -n "$(EVAL)" || { \
-	  echo "Usage: make test-eval EVAL=\"(form)\""; \
-	  exit 1; \
-	}
+	$(file >$(TEST_EVAL_TMP),$(EVAL))
 	$(call capture-output,test-eval,$(SBCL_RUN) \
+	  --eval '(ql:quickload :$(PROJECT_SYSTEM) :force t)' \
 	  --eval '(ql:quickload :$(TEST_SYSTEM) :force t)' \
-	  --eval '$(EVAL)')
+	  --load $(TEST_EVAL_TMP))
 
 # ── Clean ──────────────────────────────────────────────────────────────────
 # SBCL caches fasls under ~/.cache/common-lisp/<version>/<full-absolute-path>
