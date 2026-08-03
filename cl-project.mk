@@ -176,6 +176,7 @@ endef
 .PHONY: help load force-load load-summary test test-summary clean \
         check-quicklisp check-sbcl \
         build install demo \
+        test-eval \
         fresh-build summarize build-report
 
 # Conditional phony targets
@@ -208,6 +209,8 @@ help:
 	@echo "  make demo-<name>    - Load system and run dev/<name>.lisp"
 	@echo "  make test           - Run tests, capture output to $(TEST_OUTPUT)"
 	@echo "  make test-summary   - Show test results from last run"
+	@echo "  make test-package PKG=:pkg  - Run single test package"
+	@echo "  make test-eval EVAL=\"(form)\"  - Run arbitrary test form"
 	@echo "  make clean          - Remove fasls and SBCL cache"
 	@if [ -n "$(BINARY_NAME)" ]; then \
 	  echo "  make build          - Build binary → bin/$(BINARY_NAME)"; \
@@ -319,6 +322,32 @@ test: check-quicklisp check-sbcl
 test-summary:
 	@grep -E "Suite:|Summary:|Passed:|Failed:|Skipped:|Plan:" $(TEST_OUTPUT) 2>/dev/null | tail -20 \
 	  || echo "No test output at $(TEST_OUTPUT). Run 'make test' first."
+
+# ── Targeted testing ──────────────────────────────────────────────────────
+# Run a single test package via parachute.
+#   make test-package PKG=:my-package
+#   make test-package PKG=:my-package REPORT=interactive
+PKG ?=
+ifdef PKG
+.PHONY: test-package
+test-package: check-quicklisp check-sbcl
+	$(call capture-output,test-package,$(SBCL_RUN) \
+	  --eval '(ql:quickload :$(TEST_SYSTEM) :force t)' \
+	  --eval '(parachute:test $(PKG)$(if $(REPORT), :report (quote $(REPORT))))')
+endif
+
+# Run any test expression.  Works with any framework.
+#   make test-eval EVAL="(parachute:test :my-pkg :test-foo)"
+#   make test-eval EVAL="(5am:run! :smoke)"
+.PHONY: test-eval
+test-eval: check-quicklisp check-sbcl
+	@test -n "$(EVAL)" || { \
+	  echo "Usage: make test-eval EVAL=\"(form)\""; \
+	  exit 1; \
+	}
+	$(call capture-output,test-eval,$(SBCL_RUN) \
+	  --eval '(ql:quickload :$(TEST_SYSTEM) :force t)' \
+	  --eval '$(EVAL)')
 
 # ── Clean ──────────────────────────────────────────────────────────────────
 # SBCL caches fasls under ~/.cache/common-lisp/<version>/<full-absolute-path>
