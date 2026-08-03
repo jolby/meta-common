@@ -65,6 +65,8 @@ demo: check-quicklisp
 | =make load-summary= | Show warnings/errors from the last =make load=       |
 | =make test=        | Run tests, capture output, preserve exit code        |
 | =make test-summary= | Show test results from the last =make test=          |
+| =make test-package= | Run single test package (=PKG=:pkg =REPORT=...)    |
+| =make test-eval=    | Run arbitrary test form (=EVAL=...)                |
 | =make clean=       | Remove fasls from source tree + SBCL cache           |
 | =make fresh-build= | Clear caches + build from scratch + capture conditions |
 | =make summarize=   | Human-readable summary of latest fresh-build output  |
@@ -151,6 +153,34 @@ The macro:
 Standard targets =load=, =force-load=, and =test= use =capture-output= internally.
 =load-summary= and =test-summary= read from =$(LOAD_OUTPUT)= and =$(TEST_OUTPUT)=,
 which are derived from =$(OUTPUT_DIR)=.
+
+** Targeted Testing
+
+Run individual test packages or arbitrary test forms without running the
+full test suite:
+
+- =make test-package PKG=:my-package= — Run a single Parachute test package.
+  Optionally set =REPORT=interactive= for interactive debug mode.
+
+- =make test-eval EVAL="(form)"= — Run any test expression.  Works with
+  Parachute, FiveAM, or custom test entry points.
+
+#+begin_src makefile
+# Run a specific test package:
+make test-package PKG=:my-project.test.smoke
+
+# Same, with Parachute's interactive debugger:
+make test-package PKG=:my-project.test.smoke REPORT=interactive
+
+# Run a single test by name:
+make test-eval EVAL="(parachute:test :my-project.test :test-specific-name)"
+
+# FiveAM suite:
+make test-eval EVAL="(5am:run! :smoke)"
+#+end_src
+
+Output is captured to =/tmp/<project>-test-package-LATEST.txt= or
+=/tmp/<project>-test-eval-LATEST.txt= respectively.
 
 ** Conditional Features
 
