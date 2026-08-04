@@ -322,6 +322,28 @@ Removes a worktree /with confirmation prompt/:
 ./.cl-make/remove-worktree.sh beadwork feature-labels
 #+end_src
 
+** ~update-submodules.sh~ — Batch-Rollout ~.cl-make/~ Updates
+
+Pulls the latest =meta-common= into /all/ =.cl-make/= submodules
+(meta-level + every =repos/*/.cl-make/=) in one command.
+
+#+begin_example
+Usage: ./.cl-make/update-submodules.sh [--dry-run] [--commit]
+
+  --dry-run   Preview what would update (no changes)
+  --commit    Pull + auto-commit submodule bumps in each repo
+#+end_example
+
+#+begin_src bash
+# Preview:
+./.cl-make/update-submodules.sh --dry-run
+
+# Apply everywhere:
+./.cl-make/update-submodules.sh --commit
+#+end_src
+
+Each updated repo gets a single commit: =chore: bump .cl-make/ to latest meta-common=.
+
 ** ~check-unicode.sh~ — Unicode Audit
 
 Scans Lisp source files for non-ASCII characters.  Defaults to =repos/*/src/=,
@@ -392,11 +414,22 @@ The server listens on =http://127.0.0.1:3000/mcp=.
 
 * Updating ~.cl-make/~
 
-To pull the latest infrastructure updates:
+Two ways to pull the latest infrastructure:
+
+*Single repo (manual):*
 
 #+begin_src bash
 cd .cl-make && git pull origin main
 cd .. && git add .cl-make && git commit -m "Update .cl-make to latest"
+#+end_src
+
+*All repos at once (automated):*
+
+Run from the meta-repo root to update every =.cl-make/= in one shot:
+
+#+begin_src bash
+./.cl-make/update-submodules.sh --dry-run   # preview
+./.cl-make/update-submodules.sh --commit    # apply everywhere
 #+end_src
 
 Each sub-repo pins a specific commit of =meta-common=.  Updates are
