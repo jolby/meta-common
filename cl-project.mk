@@ -345,8 +345,11 @@ endif
 #   make test-eval EVAL="(parachute:test :my-pkg 'some-sym)"
 #   make test-eval EVAL="(format t \"hello\")"
 #   make test-eval EVAL="(5am:run! :smoke)"
-ifeq (,$(EVAL))
-  $(error EVAL is required. Usage: make test-eval EVAL="(form)")
+# Only enforce when test-eval is the actual target (not at parse time).
+ifneq (,$(filter test-eval,$(MAKECMDGOALS)))
+  ifeq (,$(EVAL))
+    $(error EVAL is required. Usage: make test-eval EVAL="(form)")
+  endif
 endif
 .PHONY: test-eval
 test-eval: check-quicklisp check-sbcl
