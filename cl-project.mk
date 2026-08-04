@@ -238,7 +238,7 @@ help:
 load: check-quicklisp check-sbcl
 	$(call capture-output,load,$(SBCL_RUN) \
 	  --eval '(ql:quickload :$(PROJECT_SYSTEM))' \
-	  --eval '(format t "~%$(PROJECT_SYSTEM) loaded.~")') ; \
+	  --eval '(format t "~%$(PROJECT_SYSTEM) loaded.~%")') ; \
 	RC=$$?; \
 	if grep -qE "caught (fatal )?(ERROR|WARNING)" $(LOAD_OUTPUT); then \
 	  echo "ERROR: Load had errors — see $(LOAD_OUTPUT) for details"; \
