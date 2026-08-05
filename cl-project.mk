@@ -175,7 +175,7 @@ define capture-output
 endef
 
 # ── Phony targets ─────────────────────────────────────────────────────────
-.PHONY: help load force-load load-summary test test-summary clean \
+.PHONY: help load force-load fast-load fast-force-load load-summary test test-summary clean \
         check-quicklisp check-sbcl \
         build install demo \
         test-eval \
@@ -206,6 +206,7 @@ help:
 	@echo ""
 	@echo "Standard targets (from cl-project.mk):"
 	@echo "  make load           - Load system (for REPL exploration)"
+	@echo "  make fast-load       - Same, but Quicklisp-only (~1-2s startup)"
 	@echo "  make force-load     - Force-reload system (clears stale fasls)"
 	@echo "  make load-summary   - Show warnings/errors from last load"
 	@echo "  make demo-<name>    - Load system and run dev/<name>.lisp"
@@ -249,6 +250,32 @@ load: check-quicklisp check-sbcl
 force-load: check-quicklisp check-sbcl
 	@echo "Force-reloading $(PROJECT_SYSTEM)..."
 	$(call capture-output,force-load,$(SBCL_RUN) \
+	  --eval '(ql:quickload :$(PROJECT_SYSTEM) :force t)') ; \
+	RC=$$?; \
+	if grep -qE "caught (fatal )?(ERROR|WARNING)" $(LOAD_OUTPUT); then \
+	  echo "ERROR: Force-load had errors — see $(LOAD_OUTPUT) for details"; \
+	  exit 1; \
+	fi; \
+	exit $$RC
+
+# ── Fast load (Quicklisp-only, no ASDF source registry scan) ─────────────
+# Same as load/force-load but uses SBCL_QL — ~1-2s startup instead of ~15s.
+# Useful for dev cycles where sibling repos are already registered with
+# Quicklisp (via ~/quicklisp/local-projects/ or ql:register-local-projects).
+fast-load: check-quicklisp check-sbcl
+	$(call capture-output,fast-load,$(SBCL_QL) \
+	  --eval '(ql:quickload :$(PROJECT_SYSTEM))' \
+	  --eval '(format t "~%$(PROJECT_SYSTEM) loaded.~%")') ; \
+	RC=$$?; \
+	if grep -qE "caught (fatal )?(ERROR|WARNING)" $(LOAD_OUTPUT); then \
+	  echo "ERROR: Load had errors — see $(LOAD_OUTPUT) for details"; \
+	  exit 1; \
+	fi; \
+	exit $$RC
+
+fast-force-load: check-quicklisp check-sbcl
+	@echo "Fast force-reloading $(PROJECT_SYSTEM)..."
+	$(call capture-output,fast-force-load,$(SBCL_QL) \
 	  --eval '(ql:quickload :$(PROJECT_SYSTEM) :force t)') ; \
 	RC=$$?; \
 	if grep -qE "caught (fatal )?(ERROR|WARNING)" $(LOAD_OUTPUT); then \
