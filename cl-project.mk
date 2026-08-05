@@ -52,7 +52,7 @@
 #   SBCL_HOME             Custom SBCL_HOME for custom SBCL builds
 #   QL                    Quicklisp setup.lisp path
 #   ASDF_SOURCE_REGISTRY  Use source-registry tree scan (yes) or Quicklisp-only (no)
-#                         (default: yes; set to no for faster startup)
+#                         (default: no — fast startup; set yes for CI/fresh-build)
 
 # ── Shell setup ───────────────────────────────────────────────────────────
 SHELL := /bin/bash
@@ -85,9 +85,10 @@ CACHE_DIR ?= $(HOME)/.cache/common-lisp
 
 # When set to "no", skip the ASDF source registry tree scan entirely —
 # much faster startup when Quicklisp already knows all systems (demo,
-# dev cycles).  Keep the default "yes" for CI/fresh-build scenarios
-# where sibling repos may not be registered with Quicklisp.
-ASDF_SOURCE_REGISTRY ?= yes
+# dev cycles).  Keep the default "no" for fast 1-2s startup in everyday
+# use.  Set to "yes" for CI/fresh-build where sibling repos may not be
+# registered with Quicklisp.
+ASDF_SOURCE_REGISTRY ?= no
 
 # ── Project directory detection ───────────────────────────────────────────
 # $(firstword $(MAKEFILE_LIST)) is the top-level Makefile that included us.
@@ -142,7 +143,7 @@ endif
 SBCL_QL = $(SBCL_CMD) $(SBCL_FLAGS) --eval '(load "$(QL)")'
 
 # SBCL_RUN: full — Quicklisp + ASDF source registry for auto-discovering
-#   sibling repos.  Set ASDF_SOURCE_REGISTRY=no to use SBCL_QL instead.
+#   sibling repos.  Set ASDF_SOURCE_REGISTRY=yes for full registry.
 ifeq ($(ASDF_SOURCE_REGISTRY),no)
   SBCL_RUN = $(SBCL_QL)
 else
@@ -230,7 +231,7 @@ help:
 	@echo "  SBCL=<path>            Custom SBCL binary"
 	@echo "  SBCL_HOME=<path>       SBCL_HOME for custom SBCL builds"
 	@echo "  QL=<path>              Quicklisp setup.lisp"
-	@echo "  ASDF_SOURCE_REGISTRY=no  Skip source registry scan for faster startup"
+	@echo "  ASDF_SOURCE_REGISTRY=yes  Enable source registry scan (for CI/fresh-build)"
 	@echo "  DYNAMIC_SPACE_SIZE=N   Heap size in MB (default: $(DYNAMIC_SPACE_SIZE))"
 
 # ── Load ──────────────────────────────────────────────────────────────────
