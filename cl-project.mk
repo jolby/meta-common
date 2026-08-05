@@ -267,8 +267,8 @@ fast-load: check-quicklisp check-sbcl
 	  --eval '(ql:quickload :$(PROJECT_SYSTEM))' \
 	  --eval '(format t "~%$(PROJECT_SYSTEM) loaded.~%")') ; \
 	RC=$$?; \
-	if grep -qE "caught (fatal )?(ERROR|WARNING)" $(LOAD_OUTPUT); then \
-	  echo "ERROR: Load had errors — see $(LOAD_OUTPUT) for details"; \
+	if grep -qE "caught (fatal )?(ERROR|WARNING)" $(OUTPUT_DIR)fast-load-LATEST.txt; then \
+	  echo "ERROR: Load had errors — see $(OUTPUT_DIR)fast-load-LATEST.txt for details"; \
 	  exit 1; \
 	fi; \
 	exit $$RC
@@ -278,8 +278,8 @@ fast-force-load: check-quicklisp check-sbcl
 	$(call capture-output,fast-force-load,$(SBCL_QL) \
 	  --eval '(ql:quickload :$(PROJECT_SYSTEM) :force t)') ; \
 	RC=$$?; \
-	if grep -qE "caught (fatal )?(ERROR|WARNING)" $(LOAD_OUTPUT); then \
-	  echo "ERROR: Force-load had errors — see $(LOAD_OUTPUT) for details"; \
+	if grep -qE "caught (fatal )?(ERROR|WARNING)" $(OUTPUT_DIR)fast-force-load-LATEST.txt; then \
+	  echo "ERROR: Force-load had errors — see $(OUTPUT_DIR)fast-force-load-LATEST.txt for details"; \
 	  exit 1; \
 	fi; \
 	exit $$RC
