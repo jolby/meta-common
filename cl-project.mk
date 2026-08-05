@@ -170,7 +170,7 @@ endif
 # the ; \ continuation on the call line appends to the last recipe line.
 define capture-output
 	@rm -f $(OUTPUT_DIR)$(1)-LATEST.txt
-	@echo "=== $(PROJECT_SYSTEM) $(1) — $$$$(date -Iseconds) ===" | tee $(OUTPUT_DIR)$(1)-LATEST.txt
+	@echo "=== $(PROJECT_SYSTEM) $(1) — `date -Iseconds` ===" | tee $(OUTPUT_DIR)$(1)-LATEST.txt
 	@$(2) 2>&1 | tee -a $(OUTPUT_DIR)$(1)-LATEST.txt
 endef
 
