@@ -447,6 +447,9 @@ BUILD_PRE_DUMP_FORM ?= \
          (sleep 0.5))
 
 BUILD_PRE_DUMP_TMP ?= /tmp/$(subst /,-,$(PROJECT_SYSTEM))-build-pre-dump.lisp
+# Where asdf:make drops the binary.  Defaults to repo root; projects whose
+# .asd uses :pathname (so :build-pathname is relative to it) override this.
+BINARY_PATH ?= $(BINARY_NAME)
 
 build: force-load
 	@if [ -z "$(BINARY_NAME)" ]; then \
@@ -460,11 +463,11 @@ build: force-load
 	  --load $(BUILD_PRE_DUMP_TMP) \
 	  --eval '(asdf:make :$(PROJECT_SYSTEM))'
 	@mkdir -p bin
-	@if [ -f $(BINARY_NAME) ]; then mv -f $(BINARY_NAME) bin/$(BINARY_NAME); fi
+	@if [ -f $(BINARY_PATH) ]; then mv -f $(BINARY_PATH) bin/$(BINARY_NAME); fi
 	@if [ -f bin/$(BINARY_NAME) ]; then \
 	  echo "Built: bin/$(BINARY_NAME) ($$(ls -lh bin/$(BINARY_NAME) | awk '{print $$5}'))"; \
 	else \
-	  echo "Build failed: no binary produced at bin/$(BINARY_NAME)"; \
+	  echo "Build failed: no binary produced at $(BINARY_PATH)"; \
 	  exit 1; \
 	fi
 
