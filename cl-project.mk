@@ -429,8 +429,24 @@ summarize: check-sbcl
 # ── Binary build & install (available when BINARY_NAME is set) ────────────
 # Projects that build a binary set BINARY_NAME before the include:
 #   BINARY_NAME := csct
-# The binary is built via asdf:make, moved to bin/<name>, and installed
-# to ~/.local/bin/<name>.
+# The binary is built via asdf:make (which wraps sb-ext:save-lisp-and-die),
+# moved to bin/<name>, and installed to ~/.local/bin/<name>.
+#
+# save-lisp-and-die refuses to save when multiple threads are running
+# (SAVE-WITH-MULTIPLE-THREADS-ERROR).  Before dumping we terminate all
+# background threads.  Override BUILD_PRE_DUMP_FORM for project-specific
+# cleanup (close DBs, stop servers, etc.).
+#
+# For full-featured deployment (foreign libs, resource dirs, boot/quit
+# hooks) see the `deploy` ASDF system (shinmera/deploy).
+
+BUILD_PRE_DUMP_FORM ?= \
+  (progn (format t "~%Stopping background threads before dump...~%") \
+         (dolist (thread (remove sb-thread:*current-thread* (sb-thread:list-all-threads))) \
+           (ignore-errors (sb-thread:terminate-thread thread))) \
+         (sleep 0.5))
+
+BUILD_PRE_DUMP_TMP ?= /tmp/$(subst /,-,$(PROJECT_SYSTEM))-build-pre-dump.lisp
 
 build: force-load
 	@if [ -z "$(BINARY_NAME)" ]; then \
@@ -438,7 +454,10 @@ build: force-load
 	  exit 1; \
 	fi
 	@echo "Building $(PROJECT_SYSTEM) binary..."
+	$(file >$(BUILD_PRE_DUMP_TMP),$(BUILD_PRE_DUMP_FORM))
 	@$(SBCL_RUN) \
+	  --eval '(ql:quickload :$(PROJECT_SYSTEM) :force t)' \
+	  --load $(BUILD_PRE_DUMP_TMP) \
 	  --eval '(asdf:make :$(PROJECT_SYSTEM))'
 	@mkdir -p bin
 	@if [ -f $(BINARY_NAME) ]; then mv -f $(BINARY_NAME) bin/$(BINARY_NAME); fi
