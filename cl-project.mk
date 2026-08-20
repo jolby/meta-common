@@ -47,6 +47,8 @@
 #   DYNAMIC_SPACE_SIZE    SBCL heap in MB (default: 4096)
 #   CLEAN_EXTRA_PATTERNS  Extra globs for make clean (default: *.db *.db-journal)
 #   BINARY_NAME           Binary output name (enables build/install targets)
+#   BINARY_PATH           Staging dir for built binary (default: bin)
+#   BINARY_BUILD_PATH     Where asdf:make drops the raw binary (default: BINARY_NAME)
 #   INSTALL_DIR           Install destination (default: ~/.local/bin)
 #   SBCL                  SBCL binary (default: sbcl)
 #   SBCL_HOME             Custom SBCL_HOME for custom SBCL builds
@@ -217,7 +219,7 @@ help:
 	@echo "  make test-eval EVAL=\"(form)\"  - Run arbitrary test form"
 	@echo "  make clean          - Remove fasls and SBCL cache"
 	@if [ -n "$(BINARY_NAME)" ]; then \
-	  echo "  make build          - Build binary → bin/$(BINARY_NAME)"; \
+	  echo "  make build          - Build binary → $(BINARY_PATH)/$(BINARY_NAME)"; \
 	  echo "  make install        - Install to $(INSTALL_DIR)/$(BINARY_NAME)"; \
 	fi
 	@if [ -n "$(GOLDEN_PACKAGE)" ]; then \
@@ -404,7 +406,7 @@ clean:
 	  find $(PROJECT_DIR) -name "$$pattern" -exec rm -f {} \;; \
 	done
 	@if [ -n "$(BINARY_NAME)" ]; then \
-	  rm -f bin/$(BINARY_NAME) $(BINARY_NAME); \
+	  rm -f $(BINARY_PATH)/$(BINARY_NAME) $(BINARY_BUILD_PATH); \
 	fi
 	@echo "Removing SBCL fasl cache..."
 	@rm -rf $(CACHE_DIR)/sbcl-*$(PROJECT_DIR)
@@ -452,9 +454,13 @@ BUILD_PRE_DUMP_FORM ?= \
          (sleep 0.5))
 
 BUILD_PRE_DUMP_TMP ?= /tmp/$(subst /,-,$(PROJECT_SYSTEM))-build-pre-dump.lisp
-# Where asdf:make drops the binary.  Defaults to repo root; projects whose
-# .asd uses :pathname (so :build-pathname is relative to it) override this.
-BINARY_PATH ?= $(BINARY_NAME)
+# Directory the built binary is installed into (staging, pre-install).
+# Defaults to ./bin — the binary ends up at $(BINARY_PATH)/$(BINARY_NAME).
+BINARY_PATH ?= bin
+# Where asdf:make drops the raw binary.  Defaults to repo root; projects
+# whose .asd uses :pathname (so :build-pathname is relative to it) override
+# this to the source subdirectory (e.g. src/cli/foo).
+BINARY_BUILD_PATH ?= $(BINARY_NAME)
 
 build: force-load
 	@if [ -z "$(BINARY_NAME)" ]; then \
@@ -467,22 +473,22 @@ build: force-load
 	  --eval '(ql:quickload :$(PROJECT_SYSTEM) :force t)' \
 	  --load $(BUILD_PRE_DUMP_TMP) \
 	  --eval '(asdf:make :$(PROJECT_SYSTEM))'
-	@mkdir -p bin
-	@if [ -f $(BINARY_PATH) ]; then mv -f $(BINARY_PATH) bin/$(BINARY_NAME); fi
-	@if [ -f bin/$(BINARY_NAME) ]; then \
-	  echo "Built: bin/$(BINARY_NAME) ($$(ls -lh bin/$(BINARY_NAME) | awk '{print $$5}'))"; \
+	@mkdir -p $(BINARY_PATH)
+	@if [ -f $(BINARY_BUILD_PATH) ]; then mv -f $(BINARY_BUILD_PATH) $(BINARY_PATH)/$(BINARY_NAME); fi
+	@if [ -f $(BINARY_PATH)/$(BINARY_NAME) ]; then \
+	  echo "Built: $(BINARY_PATH)/$(BINARY_NAME) ($$(ls -lh $(BINARY_PATH)/$(BINARY_NAME) | awk '{print $$5}'))"; \
 	else \
-	  echo "Build failed: no binary produced at $(BINARY_PATH)"; \
+	  echo "Build failed: no binary produced at $(BINARY_BUILD_PATH)"; \
 	  exit 1; \
 	fi
 
 install: build
-	@if [ -f bin/$(BINARY_NAME) ]; then \
+	@if [ -f $(BINARY_PATH)/$(BINARY_NAME) ]; then \
 	  mkdir -p $(INSTALL_DIR); \
-	  cp -f bin/$(BINARY_NAME) $(INSTALL_DIR)/$(BINARY_NAME); \
+	  cp -f $(BINARY_PATH)/$(BINARY_NAME) $(INSTALL_DIR)/$(BINARY_NAME); \
 	  echo "Installed to $(INSTALL_DIR)/$(BINARY_NAME)"; \
 	else \
-	  echo "No binary found. Run 'make build' first."; \
+	  echo "No binary found at $(BINARY_PATH)/$(BINARY_NAME). Run 'make build' first."; \
 	  exit 1; \
 	fi
 
