@@ -322,7 +322,7 @@ generate-goldens: check-quicklisp check-sbcl
 	  --eval '(ql:quickload :$(TEST_SYSTEM) :force t)' \
 	  --eval "(setf $(GOLDEN_PACKAGE):*update-goldens* t)" \
 	  --eval "(setf $(GOLDEN_PACKAGE):*update-pixel-goldens* t)" \
-	  --eval '(asdf:test-system :$(PROJECT_SYSTEM))' \
+	  --eval '(let ((cl-user::*exit-on-test-failures* t)) (declare (special cl-user::*exit-on-test-failures*)) (asdf:test-system :$(PROJECT_SYSTEM)))' \
 	  2>&1 | tee $(TEST_OUTPUT); \
 	RC=$$?; \
 	grep -E "Passed:|Failed:" $(TEST_OUTPUT) | tail -1; \
@@ -334,11 +334,16 @@ endif
 # Single SBCL invocation captures load warnings, compile errors, AND test
 # output.  Stale output file deleted first so grep never sees old results.
 # Exit code preserved via pipefail.
+# TEST_EVAL is hoisted into a variable so the $(call) parser never sees raw
+# parens inside the Lisp form (they confuse make's function-argument scan).
+# Binding cl-user::*exit-on-test-failures* makes parachute quit non-zero on
+# any failure, so a failed suite cannot silently exit 0.
+TEST_EVAL = (let ((cl-user::*exit-on-test-failures* t)) (declare (special cl-user::*exit-on-test-failures*)) (asdf:test-system :$(PROJECT_SYSTEM)))
 test: check-quicklisp check-sbcl
 	$(call capture-output,test,$(SBCL_RUN) \
 	  --eval '(ql:quickload :$(PROJECT_SYSTEM) :force t)' \
 	  --eval '(ql:quickload :$(TEST_SYSTEM) :force t)' \
-	  --eval '(asdf:test-system :$(PROJECT_SYSTEM))') ; \
+	  --eval '$(TEST_EVAL)') ; \
 	RC=$$?; \
 	echo "" | tee -a $(TEST_OUTPUT); \
 	echo "=== Exit: $$RC ===" | tee -a $(TEST_OUTPUT); \
