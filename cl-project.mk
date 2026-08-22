@@ -104,6 +104,25 @@ PARENT_DIR := $(abspath $(PROJECT_DIR)/..)
 _CL_MK_SELF := $(lastword $(MAKEFILE_LIST))
 _CL_MK_DIR := $(dir $(_CL_MK_SELF))
 
+# ── Build info (version.sexp pattern) ──────────────────────────────────────
+# Generated into BUILD_INFO_FILE before every load/build so Lisp load-time
+# forms (see e.g. src/build-info.lisp) can bake the current repo state into
+# the image. The file is regenerated on every make run — do NOT commit it.
+#
+# Disable by setting BUILD_INFO_FORM := (empty) in the project Makefile.
+GIT ?= git
+BUILD_GIT_SHA      ?= $(shell $(GIT) -C $(PROJECT_DIR) rev-parse --short HEAD 2>/dev/null || echo unknown)
+BUILD_GIT_SHA_FULL ?= $(shell $(GIT) -C $(PROJECT_DIR) rev-parse HEAD 2>/dev/null || echo unknown)
+BUILD_GIT_BRANCH   ?= $(shell $(GIT) -C $(PROJECT_DIR) rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)
+BUILD_GIT_DIRTY    ?= $(shell test -n "$$($(GIT) -C $(PROJECT_DIR) status --porcelain 2>/dev/null)" && echo dirty || echo clean)
+# Semantic version: extracted from the .asd (:version slot). Override
+# PROJECT_VERSION in the project Makefile if the .asd lives elsewhere or
+# uses another convention.
+_ASD_VERSION := $(shell grep -m1 -oE ':version +"[^"]*"' $(PROJECT_DIR)/$(PROJECT_SYSTEM).asd 2>/dev/null | sed -E 's/.*"([^"]*)".*/\1/')
+PROJECT_VERSION ?= $(or $(_ASD_VERSION),0.0.0)
+BUILD_INFO_FILE ?= $(PROJECT_DIR)/build-info.sexp
+BUILD_INFO_FORM  ?= (:version "$(PROJECT_VERSION)" :git-sha "$(BUILD_GIT_SHA)" :git-branch "$(BUILD_GIT_BRANCH)" :git-dirty "$(BUILD_GIT_DIRTY)")
+
 # ── Common SBCL flags ─────────────────────────────────────────────────────
 SBCL_FLAGS ?= --dynamic-space-size $(DYNAMIC_SPACE_SIZE) --noinform \
   --no-userinit --no-sysinit --disable-debugger --non-interactive
@@ -180,7 +199,7 @@ endef
 # ── Phony targets ─────────────────────────────────────────────────────────
 .PHONY: help load force-load fast-load fast-force-load load-summary test test-summary clean \
         check-quicklisp check-sbcl \
-        build install demo \
+        build install demo build-info \
         test-eval \
         fresh-build summarize build-report
 
@@ -250,7 +269,11 @@ load: check-quicklisp check-sbcl
 	fi; \
 	exit $$RC
 
-force-load: check-quicklisp check-sbcl
+build-info:
+	@printf '%s\n' '$(BUILD_INFO_FORM)' > $(BUILD_INFO_FILE)
+	@echo "  build-info: $(BUILD_INFO_FILE)  ($(PROJECT_VERSION) @ $(BUILD_GIT_SHA), $(BUILD_GIT_BRANCH), $(BUILD_GIT_DIRTY))"
+
+force-load: check-quicklisp check-sbcl build-info
 	@echo "Force-reloading $(PROJECT_SYSTEM)..."
 	$(call capture-output,force-load,$(SBCL_RUN) \
 	  --eval '(ql:quickload :$(PROJECT_SYSTEM) :force t)') ; \
@@ -468,6 +491,7 @@ build: force-load
 	  exit 1; \
 	fi
 	@echo "Building $(PROJECT_SYSTEM) binary..."
+	@echo "  $(BINARY_NAME): $(PROJECT_VERSION) @ $(BUILD_GIT_SHA) ($(BUILD_GIT_BRANCH), $(BUILD_GIT_DIRTY))"
 	$(file >$(BUILD_PRE_DUMP_TMP),$(BUILD_PRE_DUMP_FORM))
 	@$(SBCL_RUN) \
 	  --eval '(ql:quickload :$(PROJECT_SYSTEM) :force t)' \

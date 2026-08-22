@@ -212,6 +212,35 @@ BINARY_NAME := my-cli
 include .cl-make/cl-project.mk
 #+end_src
 
+*** Build Info (=build-info.sexp=)
+
+Every =make build= (and =make force-load=) regenerates a
+=build-info.sexp= at the project root via the =build-info= target:
+
+#+begin_src lisp
+(:version "0.1.0" :git-sha "abc1234" :git-branch "main" :git-dirty "clean")
+#+end_src
+
+Lisp code can read this at load time (e.g. in a small =src/build-info.lisp=)
+so the current git state is baked into the image at dump time. This is the
+classic CL "version file" pattern — the file is regenerated on every build, so
+=--version= always reports the exact commit the binary was built from.
+
+Key variables:
+
+- =BUILD_INFO_FILE= — output path (default: =<project>/build-info.sexp=)
+- =BUILD_INFO_FORM= — the sexp written (default: version+git metadata;
+  set to empty to disable)
+- =PROJECT_VERSION= — semantic version, auto-extracted from the =.asd=
+  =:version= (override if the =.asd= lives elsewhere)
+- =BUILD_GIT_SHA= / =BUILD_GIT_SHA_FULL= / =BUILD_GIT_BRANCH= / =BUILD_GIT_DIRTY=
+  — computed from the project repo at build time (override =GIT= for a
+  custom binary)
+
+Because the file is regenerated (and should never be committed), add
+=build-info.sexp= to the project's =.gitignore= — otherwise it will always
+show as an untracked file and the =dirty= flag will never be =clean=.
+
 *** Golden File Generation (=GOLDEN_PACKAGE=)
 
 When =GOLDEN_PACKAGE= names a package with =*update-goldens*= and
