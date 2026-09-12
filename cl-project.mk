@@ -396,15 +396,19 @@ test-summary:
 # callers often guess the dotted form). The designator is ALSO hoisted into
 # TEST_PACKAGE_EVAL so the $(call) capture-output parser never sees raw
 # parens mid-Lisp-form (same reason TEST_EVAL is hoisted for `make test`).
+# Char literals are written as (code-char N) — a literal #\/ in the
+# expanded value would start a make comment (GNU make re-scans the expanded
+# recipe line) and silently truncate the form.
 PKG ?=
 TEST_PACKAGE_EVAL = (let* ((designator $(PKG)) \
                             (name (etypecase designator \
                                     (symbol (symbol-name designator)) \
                                     (string designator) \
                                     (T (princ-to-string designator)))) \
+                            (dot (code-char 46)) (slash (code-char 47)) \
                             (pkg (or (find-package name) \
-                                     (find-package (substitute #\/ #\. name)) \
-                                     (find-package (substitute #\. #\/ name)))) \
+                                     (find-package (substitute slash dot name)) \
+                                     (find-package (substitute dot slash name)))) \
                             (target (if pkg pkg designator))) \
                       (parachute:test target$(if $(REPORT), :report (quote $(REPORT)))))
 ifdef PKG
