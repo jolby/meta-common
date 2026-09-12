@@ -234,7 +234,7 @@ help:
 	@echo "  make demo-<name>    - Load system and run dev/<name>.lisp"
 	@echo "  make test           - Run tests, capture output to $(TEST_OUTPUT)"
 	@echo "  make test-summary   - Show test results from last run"
-	@echo "  make test-package PKG=:pkg  - Run single test package"
+	@echo "  make test-package PKG=:pkg  - Run single test package (dots or slashes in the name both work)"
 	@echo "  make test-eval EVAL=\"(form)\"  - Run arbitrary test form"
 	@echo "  make clean          - Remove fasls and SBCL cache"
 	@if [ -n "$(BINARY_NAME)" ]; then \
@@ -387,14 +387,33 @@ test-summary:
 # Run a single test package via parachute.
 #   make test-package PKG=:my-package
 #   make test-package PKG=:my-package REPORT=interactive
+#
+# PKG is any parachute designator (package keyword/symbol, or a single test
+# name/suite symbol). Package names are resolved leniently: if the exact
+# name isn't found, dots <-> slashes are swapped and tried again, so both
+# PKG=:cogen-core.tests and PKG=:cogen-core/tests resolve the same package
+# (ASDF secondary test systems are conventionally named system/tests while
+# callers often guess the dotted form). The designator is ALSO hoisted into
+# TEST_PACKAGE_EVAL so the $(call) capture-output parser never sees raw
+# parens mid-Lisp-form (same reason TEST_EVAL is hoisted for `make test`).
 PKG ?=
+TEST_PACKAGE_EVAL = (let* ((designator $(PKG)) \
+                            (name (etypecase designator \
+                                    (symbol (symbol-name designator)) \
+                                    (string designator) \
+                                    (T (princ-to-string designator)))) \
+                            (pkg (or (find-package name) \
+                                     (find-package (substitute #\/ #\. name)) \
+                                     (find-package (substitute #\. #\/ name)))) \
+                            (target (if pkg pkg designator))) \
+                      (parachute:test target$(if $(REPORT), :report (quote $(REPORT)))))
 ifdef PKG
 .PHONY: test-package
 test-package: check-quicklisp check-sbcl
 	$(call capture-output,test-package,$(SBCL_RUN) \
 	  --eval '(ql:quickload :$(PROJECT_SYSTEM) :force t)' \
 	  --eval '(ql:quickload :$(TEST_SYSTEM) :force t)' \
-	  --eval '(parachute:test $(PKG)$(if $(REPORT), :report (quote $(REPORT))))')
+	  --eval '$(TEST_PACKAGE_EVAL)')
 endif
 
 # Run any test expression.  Works with any framework.

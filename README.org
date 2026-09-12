@@ -163,6 +163,13 @@ available.
 
 - =make test-package PKG=:my-package= — Run a single Parachute test package.
   Optionally set =REPORT=interactive= for interactive debug mode.
+  PKG is passed through as a Parachute designator (package keyword/symbol,
+  or a single test/suite name). Package resolution is lenient: if the exact
+  name is missing, dots ↔ slashes are swapped and retried, so
+  =PKG=:cogen-core.tests= and =PKG=:cogen-core/tests= both resolve the
+  `cogen-core/tests` package (ASDF secondary test systems are conventionally
+  named =system/tests=). Non-package designators (suite/test symbols like
+  =PKG=agent-loop-suite=) pass through unchanged.
 
 - =make test-eval EVAL="(form)"= — Run any test expression.  Works with
   Parachute, FiveAM, or custom test entry points.  /No quoting issues:/ the
