@@ -69,6 +69,18 @@ run_in_repo() {
   eval "$cmd"
 }
 
+# Helper: Check whether a repo has an 'origin' remote
+repo_has_origin() {
+  git -C "$META_DIR/$1" remote get-url origin >/dev/null 2>&1
+}
+
+# Helper: Get the repo's display name ("repo-name" / meta dir name for ".")
+repo_name() {
+  local name=$(basename "$1")
+  [ "$1" = "." ] && name=$(basename "$META_DIR")
+  echo "$name"
+}
+
 # Command: status
 cmd_status() {
   print_header "Git Status"
@@ -116,21 +128,65 @@ cmd_dirty() {
 # Command: push
 cmd_push() {
   print_header "Pushing to Origin"
+  local skipped=0
   for repo in "${REPOS[@]}"; do
     if [ -d "$META_DIR/$repo/.git" ]; then
-      run_in_repo "$repo" "git push origin $(git branch --show-current)"
+      local name=$(repo_name "$repo")
+      if ! repo_has_origin "$repo"; then
+        echo -e "\n${YELLOW}⚠ $name has no 'origin' remote — skipping push${NC}"
+        skipped=$((skipped + 1))
+        continue
+      fi
+      if ! git -C "$META_DIR/$repo" rev-parse --verify --quiet HEAD >/dev/null 2>&1; then
+        echo -e "\n${YELLOW}⚠ $name has no commits (unborn HEAD) — skipping push${NC}"
+        skipped=$((skipped + 1))
+        continue
+      fi
+      local branch
+      branch=$(git -C "$META_DIR/$repo" branch --show-current 2>/dev/null || true)
+      if [ -z "$branch" ]; then
+        echo -e "\n${YELLOW}⚠ $name is on a detached HEAD — skipping push${NC}"
+        skipped=$((skipped + 1))
+        continue
+      fi
+      run_in_repo "$repo" "git push origin $branch"
     fi
   done
+  if [ $skipped -gt 0 ]; then
+    echo -e "\n${YELLOW}$skipped repo(s) skipped (no 'origin' remote or no commits)${NC}"
+  fi
 }
 
 # Command: pull
 cmd_pull() {
   print_header "Pulling from Origin"
+  local skipped=0
   for repo in "${REPOS[@]}"; do
     if [ -d "$META_DIR/$repo/.git" ]; then
-      run_in_repo "$repo" "git pull origin $(git branch --show-current)"
+      local name=$(repo_name "$repo")
+      if ! repo_has_origin "$repo"; then
+        echo -e "\n${YELLOW}⚠ $name has no 'origin' remote — skipping pull${NC}"
+        skipped=$((skipped + 1))
+        continue
+      fi
+      if ! git -C "$META_DIR/$repo" rev-parse --verify --quiet HEAD >/dev/null 2>&1; then
+        echo -e "\n${YELLOW}⚠ $name has no commits (unborn HEAD) — skipping pull${NC}"
+        skipped=$((skipped + 1))
+        continue
+      fi
+      local branch
+      branch=$(git -C "$META_DIR/$repo" branch --show-current 2>/dev/null || true)
+      if [ -z "$branch" ]; then
+        echo -e "\n${YELLOW}⚠ $name is on a detached HEAD — skipping pull${NC}"
+        skipped=$((skipped + 1))
+        continue
+      fi
+      run_in_repo "$repo" "git pull origin $branch"
     fi
   done
+  if [ $skipped -gt 0 ]; then
+    echo -e "\n${YELLOW}$skipped repo(s) skipped (no 'origin' remote or no commits)${NC}"
+  fi
 }
 
 # Command: sync (pull then push)
