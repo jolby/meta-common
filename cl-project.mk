@@ -361,15 +361,30 @@ endif
 # Exit code preserved via pipefail.
 # TEST_EVAL is hoisted into a variable so the $(call) parser never sees raw
 # parens inside the Lisp form (they confuse make's function-argument scan).
-# Binding cl-user::*exit-on-test-failures* makes parachute quit non-zero on
-# any failure, so a failed suite cannot silently exit 0.
-TEST_EVAL = (let ((cl-user::*exit-on-test-failures* t)) (declare (special cl-user::*exit-on-test-failures*)) (asdf:test-system :$(PROJECT_SYSTEM)))
+#
+# *exit-on-test-failures* is bound NIL on purpose.  Binding it T makes
+# parachute call sb-ext:exit from inside (asdf:test-system ...); ASDF's
+# operate unwinds the in-flight --eval form and SBCL then prints the
+# confusing "compilation unit aborted / caught 1 fatal ERROR condition"
+# banner even on a passing run.  The test target derives the exit code from
+# the captured "Failed: N" line instead.  The direct-test targets
+# (test-package/test-eval) call parachute:test outside ASDF, where the exit
+# is clean, so they DO set PARACHUTE_EXIT_EVAL below.
+TEST_EVAL = (let ((cl-user::*exit-on-test-failures* nil)) (declare (special cl-user::*exit-on-test-failures*)) (asdf:test-system :$(PROJECT_SYSTEM)))
+
+# Set parachute's *exit-on-test-failures* in the image for the direct-test
+# targets.  defparameter proclaims the symbol special so parachute's
+# boundp/symbol-value check sees t; a failing run then exits non-zero.
+# (test-package/test-eval call parachute:test directly, not via ASDF, so
+# there is no abort banner.)
+PARACHUTE_EXIT_EVAL = (eval (quote (defparameter cl-user::*exit-on-test-failures* t)))
 test: check-quicklisp check-sbcl
 	$(call capture-output,test,$(SBCL_RUN) \
 	  --eval '(ql:quickload :$(PROJECT_SYSTEM) :force t)' \
 	  --eval '(ql:quickload :$(TEST_SYSTEM) :force t)' \
 	  --eval '$(TEST_EVAL)') ; \
 	RC=$$?; \
+	if grep -qE "^Failed:[[:space:]]*[1-9]" $(TEST_OUTPUT); then RC=1; fi; \
 	echo "" | tee -a $(TEST_OUTPUT); \
 	echo "=== Exit: $$RC ===" | tee -a $(TEST_OUTPUT); \
 	grep -E "Passed:|Failed:" $(TEST_OUTPUT) | tail -1; \
@@ -417,6 +432,7 @@ test-package: check-quicklisp check-sbcl
 	$(call capture-output,test-package,$(SBCL_RUN) \
 	  --eval '(ql:quickload :$(PROJECT_SYSTEM) :force t)' \
 	  --eval '(ql:quickload :$(TEST_SYSTEM) :force t)' \
+	  --eval '$(PARACHUTE_EXIT_EVAL)' \
 	  --eval '$(TEST_PACKAGE_EVAL)')
 endif
 
@@ -438,6 +454,7 @@ test-eval: check-quicklisp check-sbcl
 	$(call capture-output,test-eval,$(SBCL_RUN) \
 	  --eval '(ql:quickload :$(PROJECT_SYSTEM) :force t)' \
 	  --eval '(ql:quickload :$(TEST_SYSTEM) :force t)' \
+	  --eval '$(PARACHUTE_EXIT_EVAL)' \
 	  --load $(TEST_EVAL_TMP))
 
 # ── Clean ──────────────────────────────────────────────────────────────────
