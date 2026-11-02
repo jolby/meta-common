@@ -11,6 +11,9 @@
 #   verdict-no-suite   system whose test-op runs nothing    -> FAIL, exit != 0
 #   verdict-eval-fail  test-package (direct parachute call) -> FAIL in the log
 #   verdict-pass       test-eval with a trivial form        -> PASS, exit 0
+#   synthetic logs     one gate at a time (counted failure,
+#                      ✘, Failures block, no summary, bad
+#                      command exit, missing log)            -> each FAIL
 #
 # The eval-fail case also asserts that the counters really do lie ("Passed: 1"
 # with "Failed: 0"), so the check cannot silently stop exercising the trap.
@@ -68,7 +71,7 @@ verdict_is_last() {
 echo "== test-trust: fixtures under $FIXTURES =="
 
 # ── 1. A genuinely green suite: PASS, exit 0 ──────────────────────────────
-echo "[1/5] verdict-pass / make test — must PASS"
+echo "[1/6] verdict-pass / make test — must PASS"
 LOG=$(log_for "$FIXTURES/verdict-pass" test)
 run_make "$FIXTURES/verdict-pass" test
 check "verdict-pass: make test exits 0"                      "$(is "$RC")"
@@ -76,7 +79,7 @@ check "verdict-pass: log says PASS"                          "$(is "$(verdict_is
 check "verdict-pass: the verdict line is the log's last line" "$(is "$(verdict_is_last "$LOG"; echo $?)")"
 
 # ── 2. Only failure is a test that failed to evaluate: FAIL, exit != 0 ────
-echo "[2/5] verdict-eval-fail / make test — must FAIL"
+echo "[2/6] verdict-eval-fail / make test — must FAIL"
 LOG=$(log_for "$FIXTURES/verdict-eval-fail" test)
 run_make "$FIXTURES/verdict-eval-fail" test
 check "verdict-eval-fail: make test exits non-zero"          "$(is "$([ "$RC" -ne 0 ] && echo 0 || echo 1)")"
@@ -87,7 +90,7 @@ check "verdict-eval-fail: parachute's counters still lie (Failed: 0)"      "$(is
 check "verdict-eval-fail: the verdict names the real reason" "$(is "$(grep -q 'failed to evaluate properly' "$LOG" && grep -q '^=== VERDICT reasons ===' "$LOG"; echo $?)")"
 
 # ── 3. A suite that never ran: FAIL, exit != 0 ────────────────────────────
-echo "[3/5] verdict-no-suite / make test — must FAIL"
+echo "[3/6] verdict-no-suite / make test — must FAIL"
 LOG=$(log_for "$FIXTURES/verdict-no-suite" test)
 run_make "$FIXTURES/verdict-no-suite" test
 check "verdict-no-suite: make test exits non-zero"           "$(is "$([ "$RC" -ne 0 ] && echo 0 || echo 1)")"
@@ -96,7 +99,7 @@ check "verdict-no-suite: the verdict names the missing suite" "$(is "$(grep -q '
 check "verdict-no-suite: nothing in the log claims success"  "$(is "$(grep -qE '=== Exit: 0|VERDICT: PASS' "$LOG" && echo 1 || echo 0)")"
 
 # ── 4. test-package: same trap, direct parachute call ─────────────────────
-echo "[4/5] verdict-eval-fail / make test-package — must FAIL in the log"
+echo "[4/6] verdict-eval-fail / make test-package — must FAIL in the log"
 LOG=$(log_for "$FIXTURES/verdict-eval-fail" test-package)
 run_make "$FIXTURES/verdict-eval-fail" test-package PKG=":verdict-eval-fail/tests"
 check "test-package: exits non-zero"                         "$(is "$([ "$RC" -ne 0 ] && echo 0 || echo 1)")"
@@ -104,12 +107,46 @@ check "test-package: log says FAIL"                          "$(is "$(verdict_is
 check "test-package: the verdict line is the log's last line" "$(is "$(verdict_is_last "$LOG"; echo $?)")"
 
 # ── 5. test-eval: arbitrary form, no summary required ─────────────────────
-echo "[5/5] verdict-pass / make test-eval — must PASS without a summary"
+echo "[5/6] verdict-pass / make test-eval — must PASS without a summary"
 LOG=$(log_for "$FIXTURES/verdict-pass" test-eval)
 run_make "$FIXTURES/verdict-pass" test-eval 'EVAL=(format t "~&trivial form ran.~%")'
 check "test-eval: exits 0"                                   "$(is "$RC")"
 check "test-eval: log says PASS"                             "$(is "$(verdict_is "$LOG" PASS; echo $?)")"
 check "test-eval: the verdict line is the log's last line"    "$(is "$(verdict_is_last "$LOG"; echo $?)")"
+
+# ── 6. The verdict script's own gates, on synthetic logs ──────────────────
+echo "[6/6] test-verdict.sh — one gate at a time, no Lisp involved"
+SYNTH=$(mktemp -d /tmp/test-trust-synth.XXXXXX)
+GREEN="=== x ===
+;; Summary:
+Passed:     3
+Failed:     0
+Skipped:    0"
+
+# synth <name> <log-body> [rc] — writes the body, runs the verdict, sets VRC
+synth() {
+  local log="$SYNTH/$1.txt"
+  printf '%b\n' "$2" >"$log"
+  bash "${CL_MK_DIR%/}/test-verdict.sh" --target test --require-summary "$log" "${3:-0}" >/dev/null 2>&1
+  VRC=$?
+}
+
+synth green "$GREEN"
+check "green log with a summary exits 0"                     "$(is "$VRC")"
+synth counted "$GREEN\nFailed:     2"
+check "a counted failure exits non-zero"                     "$(is "$([ "$VRC" -ne 0 ] && echo 0 || echo 1)")"
+synth glyph "$GREEN\n  0.000 ✘ PKG::SOME-TEST"
+check "a bare ✘ exits non-zero"                              "$(is "$([ "$VRC" -ne 0 ] && echo 0 || echo 1)")"
+synth failures "$GREEN\n;; Failures:\n  0/0 tests failed in PKG::T"
+check "a ;; Failures: block exits non-zero"                  "$(is "$([ "$VRC" -ne 0 ] && echo 0 || echo 1)")"
+synth no-summary "=== x ===\n; Loading \"foo\""
+check "a log with no summary exits non-zero"                 "$(is "$([ "$VRC" -ne 0 ] && echo 0 || echo 1)")"
+synth green "$GREEN" 7
+check "a non-zero command exit fails an otherwise green log" "$(is "$([ "$VRC" -ne 0 ] && echo 0 || echo 1)")"
+bash "${CL_MK_DIR%/}/test-verdict.sh" --target test "$SYNTH/does-not-exist.txt" 0 >/dev/null 2>&1
+check "a missing log exits non-zero"                         "$(is "$([ "$?" -ne 0 ] && echo 0 || echo 1)")"
+rm -f "$SYNTH"/*.txt
+rmdir "$SYNTH"
 
 echo ""
 if [ "$failed" -eq 0 ]; then
