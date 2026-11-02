@@ -77,6 +77,10 @@ LOAD_OUTPUT ?= /tmp/$(subst /,-,$(PROJECT_SYSTEM))-load-LATEST.txt
 # Base directory prefix for captured output files.
 # Per-target capture goes to $(OUTPUT_DIR)<target>-LATEST.txt
 OUTPUT_DIR ?= /tmp/$(subst /,-,$(PROJECT_SYSTEM))-
+# Logs for the two targets that do not follow the TEST_OUTPUT name.  Must
+# match what capture-output writes, or the verdict reads a stale file.
+TEST_PACKAGE_OUTPUT ?= $(OUTPUT_DIR)test-package-LATEST.txt
+TEST_EVAL_OUTPUT ?= $(OUTPUT_DIR)test-eval-LATEST.txt
 # Temp file for $(file ...) output — avoids shell quoting issues with --eval
 TEST_EVAL_TMP ?= /tmp/$(subst /,-,$(PROJECT_SYSTEM))-test-eval-tmp.lisp
 
@@ -200,7 +204,7 @@ endef
 .PHONY: help load force-load fast-load fast-force-load load-summary test test-summary clean \
         check-quicklisp check-sbcl \
         build install demo build-info \
-        test-eval \
+        test-eval test-trust \
         fresh-build summarize build-report
 
 # Conditional phony targets
@@ -234,6 +238,7 @@ help:
 	@echo "  make demo-<name>    - Load system and run dev/<name>.lisp"
 	@echo "  make test           - Run tests, capture output to $(TEST_OUTPUT)"
 	@echo "  make test-summary   - Show test results from last run"
+	@echo "  make test-trust     - Self-check that the test verdict can be trusted"
 	@echo "  make test-package PKG=:pkg  - Run single test package (dots or slashes in the name both work)"
 	@echo "  make test-eval EVAL=\"(form)\"  - Run arbitrary test form"
 	@echo "  make clean          - Remove fasls and SBCL cache"
@@ -355,6 +360,25 @@ generate-goldens: check-quicklisp check-sbcl
 	exit $$RC
 endif
 
+# ── Test verdict ───────────────────────────────────────────────────────────
+# The test targets do not trust Parachute's counters, and they cannot trust
+# SBCL's exit status either (bd-xvg).  test-verdict.sh computes ONE verdict
+# after the run, writes it into the captured log as its LAST line, and its
+# own exit status is the target's.  Nothing above that line claims success.
+#
+# Read the verdict line, not "Passed:/Failed:" — Parachute does not count a
+# test that failed to evaluate (an unhandled error in the test body), so the
+# summary can read "Failed: 0" while the log contains ✘ and a ";; Failures:"
+# block.  Read the ";; Failures:" block, or the VERDICT line.
+#
+# TEST_SUMMARY_PATTERN is what "the suite actually ran" looks like in the
+# log; a log with no summary line is a FAIL for test/test-package.  Set
+# TEST_REQUIRE_SUMMARY=no to drop that gate, or override the pattern for a
+# framework that prints something else.
+TEST_VERDICT_SH := $(_CL_MK_DIR)test-verdict.sh
+TEST_SUMMARY_PATTERN ?= ^(;; Summary:|Total:|Running test suite| *Did [0-9]+ checks?)
+TEST_REQUIRE_SUMMARY ?= yes
+
 # ── Test ───────────────────────────────────────────────────────────────────
 # Single SBCL invocation captures load warnings, compile errors, AND test
 # output.  Stale output file deleted first so grep never sees old results.
@@ -366,10 +390,11 @@ endif
 # parachute call sb-ext:exit from inside (asdf:test-system ...); ASDF's
 # operate unwinds the in-flight --eval form and SBCL then prints the
 # confusing "compilation unit aborted / caught 1 fatal ERROR condition"
-# banner even on a passing run.  The test target derives the exit code from
-# the captured "Failed: N" line instead.  The direct-test targets
-# (test-package/test-eval) call parachute:test outside ASDF, where the exit
-# is clean, so they DO set PARACHUTE_EXIT_EVAL below.
+# banner even on a passing run.  The consequence: SBCL exits 0 even with
+# failing tests, so its status is only one input to the verdict below — it
+# is never the verdict.  The direct-test targets (test-package/test-eval)
+# call parachute:test outside ASDF, where the exit is clean, so they DO set
+# PARACHUTE_EXIT_EVAL below.
 TEST_EVAL = (let ((cl-user::*exit-on-test-failures* nil)) (declare (special cl-user::*exit-on-test-failures*)) (asdf:test-system :$(PROJECT_SYSTEM)))
 
 # Set parachute's *exit-on-test-failures* in the image for the direct-test
@@ -384,19 +409,24 @@ test: check-quicklisp check-sbcl
 	  --eval '(ql:quickload :$(TEST_SYSTEM) :force t)' \
 	  --eval '$(TEST_EVAL)') ; \
 	RC=$$?; \
-	if grep -qE "^Failed:[[:space:]]*[1-9]" $(TEST_OUTPUT); then RC=1; fi; \
-	echo "" | tee -a $(TEST_OUTPUT); \
-	echo "=== Exit: $$RC ===" | tee -a $(TEST_OUTPUT); \
-	grep -E "Passed:|Failed:" $(TEST_OUTPUT) | tail -1; \
-	if grep -q "failed to evaluate properly" $(TEST_OUTPUT); then \
-	  echo "ERROR: Tests failed to evaluate — see $(TEST_OUTPUT) for details"; \
-	  exit 1; \
-	fi; \
-	exit $$RC
+	TEST_SUMMARY_PATTERN='$(TEST_SUMMARY_PATTERN)' TEST_REQUIRE_SUMMARY=$(TEST_REQUIRE_SUMMARY) \
+	  bash $(TEST_VERDICT_SH) --target test --require-summary $(TEST_OUTPUT) $$RC
 
 test-summary:
-	@grep -E "Suite:|Summary:|Passed:|Failed:|Skipped:|Plan:" $(TEST_OUTPUT) 2>/dev/null | tail -20 \
+	@grep -E "Suite:|Summary:|Passed:|Failed:|Skipped:|Plan:|VERDICT:" $(TEST_OUTPUT) 2>/dev/null | tail -20 \
 	  || echo "No test output at $(TEST_OUTPUT). Run 'make test' first."
+
+# ── Verdict self-check ────────────────────────────────────────────────────
+# Runs the fixture systems in test-fixtures/ through the real test targets and
+# asserts the verdict is right: a green suite passes; a suite whose only
+# failure is a test that failed to evaluate fails, with its log saying FAIL; a
+# suite that never ran fails too.  This is the regression test for bd-xvg — a
+# verdict based on the "Failed:" counter or on SBCL's exit status breaks it.
+#
+# The fixtures live next to this file, so every project that includes
+# cl-project.mk can run the same self-check.
+test-trust: check-quicklisp check-sbcl
+	@bash $(_CL_MK_DIR)test-trust.sh "$(_CL_MK_DIR)" "$(SBCL)" "$(QL)"
 
 # ── Targeted testing ──────────────────────────────────────────────────────
 # Run a single test package via parachute.
@@ -433,7 +463,10 @@ test-package: check-quicklisp check-sbcl
 	  --eval '(ql:quickload :$(PROJECT_SYSTEM) :force t)' \
 	  --eval '(ql:quickload :$(TEST_SYSTEM) :force t)' \
 	  --eval '$(PARACHUTE_EXIT_EVAL)' \
-	  --eval '$(TEST_PACKAGE_EVAL)')
+	  --eval '$(TEST_PACKAGE_EVAL)') ; \
+	RC=$$?; \
+	TEST_SUMMARY_PATTERN='$(TEST_SUMMARY_PATTERN)' TEST_REQUIRE_SUMMARY=$(TEST_REQUIRE_SUMMARY) \
+	  bash $(TEST_VERDICT_SH) --target test-package --require-summary $(TEST_PACKAGE_OUTPUT) $$RC
 endif
 
 # Run any test expression.  Works with any framework.
@@ -455,7 +488,10 @@ test-eval: check-quicklisp check-sbcl
 	  --eval '(ql:quickload :$(PROJECT_SYSTEM) :force t)' \
 	  --eval '(ql:quickload :$(TEST_SYSTEM) :force t)' \
 	  --eval '$(PARACHUTE_EXIT_EVAL)' \
-	  --load $(TEST_EVAL_TMP))
+	  --load $(TEST_EVAL_TMP)) ; \
+	RC=$$?; \
+	TEST_SUMMARY_PATTERN='$(TEST_SUMMARY_PATTERN)' \
+	  bash $(TEST_VERDICT_SH) --target test-eval $(TEST_EVAL_OUTPUT) $$RC
 
 # ── Clean ──────────────────────────────────────────────────────────────────
 # SBCL caches fasls under ~/.cache/common-lisp/<version>/<full-absolute-path>

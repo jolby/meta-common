@@ -63,8 +63,9 @@ demo: check-quicklisp
 | =make load=        | Quickload the system, capture output, check for errors |
 | =make force-load=  | Force-reload system (clears stale fasls)              |
 | =make load-summary= | Show warnings/errors from the last =make load=       |
-| =make test=        | Run tests, capture output, preserve exit code        |
+| =make test=        | Run tests, capture output, compute the PASS/FAIL verdict |
 | =make test-summary= | Show test results from the last =make test=          |
+| =make test-trust=  | Self-check that the test verdict can be trusted      |
 | =make test-package= | Run single test package (=PKG=:pkg =REPORT=...)    |
 | =make test-eval=    | Run arbitrary test form (=EVAL=...)                |
 | =make clean=       | Remove fasls from source tree + SBCL cache           |
@@ -93,6 +94,8 @@ demo: check-quicklisp
 | =SBCL_HOME=            | /empty/                     | Custom SBCL_HOME for custom SBCL builds       |
 | =QL=                   | =~/quicklisp/setup.lisp=    | Quicklisp setup.lisp path                     |
 | =ASDF_SOURCE_REGISTRY= | =yes=                       | Set to =no= for faster Quicklisp-only startup |
+| =TEST_SUMMARY_PATTERN= | Parachute + FiveAM summary  | What "the suite actually ran" looks like       |
+| =TEST_REQUIRE_SUMMARY= | =yes=                       | Set to =no= to drop the "did the suite run" gate |
 
 ** SBCL Commands
 
@@ -153,6 +156,64 @@ The macro:
 Standard targets =load=, =force-load=, and =test= use =capture-output= internally.
 =load-summary= and =test-summary= read from =$(LOAD_OUTPUT)= and =$(TEST_OUTPUT)=,
 which are derived from =$(OUTPUT_DIR)=.
+
+** The Test Verdict — read the verdict line, not the counters
+
+=make test=, =make test-package=, and =make test-eval= do not derive their
+result from SBCL's exit status, and they do not trust the
+=Passed:/Failed:= counters.  Neither is a test result:
+
+- SBCL exits 0 with failing tests.  =make test= binds Parachute's
+  =cl-user::*exit-on-test-failures* to =NIL= on purpose; binding it =T=
+  makes Parachute call =sb-ext:exit= from inside =asdf:test-system=, which
+  ASDF unwinds into a confusing "compilation unit aborted / caught 1 fatal
+  ERROR condition" banner even on a green run.
+- Parachute's =Failed:= counter does not count a test that *failed to
+  evaluate* (an unhandled error in the test body).  Its =summarize= method
+  filters =TEST-RESULT= objects out of the counters, and such a test is one.
+  The log then shows =Passed: 361 / Failed: 0=, a =✘= line, and a
+  =;; Failures:= block, all at once.
+
+So the shared targets call =test-verdict.sh=, which computes ONE verdict
+after the run, writes the reasons (if any) and then the verdict into the
+captured log *as its last line*, and exits on that verdict (bd-xvg).
+The verdict is the log's own conclusion:
+
+#+begin_example
+;; Summary:
+Passed:     1
+Failed:     0
+Skipped:    0
+
+;; Failures:
+   0/   0 tests failed in MY-PROJECT/TESTS::SOMETHING
+The test failed to evaluate properly:
+  ...
+
+=== VERDICT reasons ===
+  - the ';; Failures:' block is non-empty (it includes tests that failed to evaluate, which the counters ignore)
+  - 1 test(s) failed to evaluate properly
+  - the log contains the ✘ failure glyph
+=== VERDICT: FAIL (target: test, log: /tmp/my-project-test-LATEST.txt) ===
+#+end_example
+
+The gates are: the command's exit status, =^Failed: [1-9]=, a
+=;; Failures:= block, the string =failed to evaluate properly=, the =✘=
+glyph, and — for =test=/=test-package= — the presence of a summary line at
+all.  That last gate is what stops =make test= from reporting success on a
+suite that never ran (a system whose =test-op= does nothing exits 0 and
+prints no summary).
+
+=make test-trust= is the regression test for all of this.  It runs three
+fixture systems in =test-fixtures/= through the real targets and asserts
+that a green suite PASSes, that a suite whose only failure is an unevaluated
+test FAILs (while its counters still say =Failed: 0=), and that a suite
+that never ran FAILs too.  Run it after changing any of this machinery.
+
+/If your project defines its own =test:= target, none of the above applies to
+it./  Either call =test-verdict.sh= yourself at the end of the recipe, or do
+not override =test:= at all.
+
 
 ** Targeted Testing
 

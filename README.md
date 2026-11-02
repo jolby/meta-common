@@ -23,6 +23,9 @@ include .cl-make/cl-project.mk
 |------|---------|
 | `README.org` | Full documentation — targets, variables, scripts, design |
 | `cl-project.mk` | Common Lisp project Makefile |
+| `test-verdict.sh` | Computes the one authoritative PASS/FAIL verdict for a test log |
+| `test-trust.sh` | Self-check: do the fixtures get the verdict they deserve? |
+| `test-fixtures/` | Fixture systems for `make test-trust` (green, unevaluated, no suite) |
 | `fresh-build.lisp` | SBCL fresh-build with condition capture |
 | `summarize-build.lisp` | Human-readable build output summarizer |
 | `parse-build-log.lisp` | Build log parser |
