@@ -40,6 +40,7 @@
 # Standard overrideable variables:
 #   PROJECT_SYSTEM        ASDF system name (REQUIRED)
 #   TEST_SYSTEM           ASDF test system (default: PROJECT_SYSTEM/tests)
+#   BUILD_SYSTEM          ASDF system holding program-op (default: PROJECT_SYSTEM)
 #   TEST_FRAMEWORK        asdf, parachute, or fiveam (default: asdf)
 #   EXTRA_ASDF_DIRS       Additional dirs to add to source registry
 #   EXTRA_ASDF_TREES      Additional :tree entries for source registry
@@ -63,6 +64,7 @@ SHELL := /bin/bash
 # ── Overrideable variables ────────────────────────────────────────────────
 PROJECT_SYSTEM ?= $(error PROJECT_SYSTEM must be set before including cl-project.mk)
 TEST_SYSTEM ?= $(PROJECT_SYSTEM)/tests
+BUILD_SYSTEM ?= $(PROJECT_SYSTEM)
 TEST_FRAMEWORK ?= asdf
 EXTRA_ASDF_DIRS ?=
 EXTRA_ASDF_TREES ?=
@@ -628,13 +630,13 @@ build: force-load
 	  echo "BINARY_NAME not set. Set BINARY_NAME := <name> before include to enable build."; \
 	  exit 1; \
 	fi
-	@echo "Building $(PROJECT_SYSTEM) binary..."
+	@echo "Building $(BUILD_SYSTEM) binary..."
 	@echo "  $(BINARY_NAME): $(PROJECT_VERSION) @ $(BUILD_GIT_SHA) ($(BUILD_GIT_BRANCH), $(BUILD_GIT_DIRTY))"
 	$(file >$(BUILD_PRE_DUMP_TMP),$(BUILD_PRE_DUMP_FORM))
 	@$(SBCL_RUN) \
-	  --eval '(ql:quickload :$(PROJECT_SYSTEM) :force t)' \
+	  --eval '(ql:quickload :$(BUILD_SYSTEM) :force t)' \
 	  --load $(BUILD_PRE_DUMP_TMP) \
-	  --eval '(asdf:make :$(PROJECT_SYSTEM))'
+	  --eval '(asdf:make :$(BUILD_SYSTEM))'
 	@mkdir -p $(BINARY_PATH)
 	@if [ -f $(BINARY_BUILD_PATH) ]; then mv -f $(BINARY_BUILD_PATH) $(BINARY_PATH)/$(BINARY_NAME); fi
 	@if [ -f $(BINARY_PATH)/$(BINARY_NAME) ]; then \
