@@ -507,6 +507,12 @@ test-eval: check-quicklisp check-sbcl
 # are ignored on purpose -- structurally aware editors (csct) compile isolated
 # fragments in /tmp and warn about symbols from files they deliberately do not load.
 #
+# The recompilation MUST go through ASDF: (ql:quickload :sys :force t) accepts the
+# keyword (its lambda list has &allow-other-keys) and ignores it, so it only compiles
+# what ASDF thinks is stale. With every fasl fresh that compiles nothing, no warning is
+# ever emitted, and the target passes on an empty log -- the exact silent-pass failure
+# this check exists to prevent (found 2026-11-03 while promoting it here).
+#
 # Deliberately NOT a prerequisite of test: it force-loads the whole system, which costs
 # seconds on every run. `make lint` is a pre-commit check.
 #
@@ -517,7 +523,9 @@ LINT_SOURCE_DIR ?= src
 
 .PHONY: lint
 lint: check-quicklisp check-sbcl
-	$(call capture-output,lint,$(SBCL_RUN) --eval '(ql:quickload :$(PROJECT_SYSTEM) :force t)') ; \
+	$(call capture-output,lint,$(SBCL_RUN) \
+	  --eval '(ql:quickload :$(PROJECT_SYSTEM))' \
+	  --eval '(asdf:load-system :$(PROJECT_SYSTEM) :force t)') ; \
 	RC=$$?; \
 	if [ $$RC -ne 0 ]; then \
 	  echo ""; \
