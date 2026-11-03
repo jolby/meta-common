@@ -516,6 +516,12 @@ test-eval: check-quicklisp check-sbcl
 # Deliberately NOT a prerequisite of test: it force-loads the whole system, which costs
 # seconds on every run. `make lint` is a pre-commit check.
 #
+# The quickload before the force-recompile also loads every file, so an intra-system
+# forward reference (a file using a special the next file defines) is already bound when
+# it is recompiled and is not reported. That is deliberate: it is a different bug class
+# from a docstring that swallows the body, and reporting those would make lint fail on
+# a fresh image and pass on a warm one.
+#
 # LINT_ALLOWED lists symbol substrings that are known and tolerated; keep it empty
 # unless a warning is a real false positive, and say why next to it.
 LINT_ALLOWED ?=
