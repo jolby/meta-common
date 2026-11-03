@@ -204,7 +204,7 @@ endef
 .PHONY: help load force-load fast-load fast-force-load load-summary test test-summary clean \
         check-quicklisp check-sbcl \
         build install demo build-info \
-        test-eval test-trust \
+        test-eval test-trust lint \
         fresh-build summarize build-report
 
 # Conditional phony targets
@@ -241,6 +241,7 @@ help:
 	@echo "  make test-trust     - Self-check that the test verdict can be trusted"
 	@echo "  make test-package PKG=:pkg  - Run single test package (dots or slashes in the name both work)"
 	@echo "  make test-eval EVAL=\"(form)\"  - Run arbitrary test form"
+	@echo "  make lint           - Fail on undefined-symbol warnings from src/ (not part of test)"
 	@echo "  make clean          - Remove fasls and SBCL cache"
 	@if [ -n "$(BINARY_NAME)" ]; then \
 	  echo "  make build          - Build binary → $(BINARY_PATH)/$(BINARY_NAME)"; \
@@ -492,6 +493,53 @@ test-eval: check-quicklisp check-sbcl
 	RC=$$?; \
 	TEST_SUMMARY_PATTERN='$(TEST_SUMMARY_PATTERN)' \
 	  bash $(TEST_VERDICT_SH) --target test-eval $(TEST_EVAL_OUTPUT) $$RC
+
+# ── Compiler-warning lint (bd-a8r) ────────────────────────────────────────
+# A docstring that quotes a phrase with a plain double quote ENDS at that quote.
+# The rest of the sentence becomes body forms: the function still compiles, and it
+# signals an unbound-variable error the first time it runs. For something that renders
+# every frame that kills the process instantly. Parenthesis checkers, CST parsers and
+# structural editors all accept such a file -- the compiler's own "undefined variable"
+# warning is the only cheap detector.
+#
+# So: force-load the system, then fail when a warning about an undefined variable or
+# function is attributed to a file under $(LINT_SOURCE_DIR)/. Warnings from other files
+# are ignored on purpose -- structurally aware editors (csct) compile isolated
+# fragments in /tmp and warn about symbols from files they deliberately do not load.
+#
+# Deliberately NOT a prerequisite of test: it force-loads the whole system, which costs
+# seconds on every run. `make lint` is a pre-commit check.
+#
+# LINT_ALLOWED lists symbol substrings that are known and tolerated; keep it empty
+# unless a warning is a real false positive, and say why next to it.
+LINT_ALLOWED ?=
+LINT_SOURCE_DIR ?= src
+
+.PHONY: lint
+lint: check-quicklisp check-sbcl
+	$(call capture-output,lint,$(SBCL_RUN) --eval '(ql:quickload :$(PROJECT_SYSTEM) :force t)') ; \
+	RC=$$?; \
+	if [ $$RC -ne 0 ]; then \
+	  echo ""; \
+	  echo "lint: the force-load itself failed (exit $$RC) -- warnings are not the problem:"; \
+	  tail -20 $(OUTPUT_DIR)lint-LATEST.txt; \
+	  exit $$RC; \
+	fi; \
+	HITS=$$(awk '/^; file: /{file=$$0} /[Uu]ndefined (variable|function)/{ \
+	               if (file ~ /\/$(LINT_SOURCE_DIR)\//) printf "%s\n    %s\n", file, $$0 }' \
+	             $(OUTPUT_DIR)lint-LATEST.txt); \
+	if [ -n "$(LINT_ALLOWED)" ]; then \
+	  HITS=$$(printf '%s\n' "$$HITS" | grep -vF -e "$(LINT_ALLOWED)"); \
+	fi; \
+	if [ -n "$$HITS" ]; then \
+	  echo ""; \
+	  echo "lint: undefined-symbol warnings from $(LINT_SOURCE_DIR)/ -- a docstring probably"; \
+	  echo "      ends at an inner double quote (bd-a8r), or a definition is missing:"; \
+	  echo ""; \
+	  printf '%s\n' "$$HITS"; \
+	  exit 1; \
+	fi; \
+	echo "lint: no undefined-symbol warnings from $(LINT_SOURCE_DIR)/ ($(OUTPUT_DIR)lint-LATEST.txt)"
 
 # ── Clean ──────────────────────────────────────────────────────────────────
 # SBCL caches fasls under ~/.cache/common-lisp/<version>/<full-absolute-path>
