@@ -202,6 +202,26 @@ define capture-output
 	@$(2) 2>&1 | tee -a $(OUTPUT_DIR)$(1)-LATEST.txt
 endef
 
+# ── Honest recompilation (bd-fyv) ────────────────────────────────────────
+# (ql:quickload :sys :force t) registers the system and silently DISCARDS :force:
+# Quicklisp's lambda list ends in &allow-other-keys, so the keyword is accepted and
+# dropped, and ASDF then compiles only what it thinks is stale. That is how two real
+# defects -- a docstring that broke HARNESS-CLOSE, and (MAP 'fn vector) -- shipped
+# through a green `make test`: the run was green against a FASL that no longer matched
+# its source.
+#
+# Registering is Quicklisp's job and compiling is ASDF's, so a target that promises a
+# recompile asks for both:
+#
+#   $(call force-forms,cogen-tui)  →  --eval '(ql:quickload :cogen-tui)'
+#                                     --eval '(asdf:load-system :cogen-tui :force t)'
+#
+# Used by force-load, fast-force-load, test, test-package, test-eval, generate-goldens
+# and build. Loading starts at ~1s warm; forcing a project this size costs a few seconds
+# of compile, which is the price of the report meaning what it says.
+force-forms = --eval '(ql:quickload :$(1))' \
+              --eval '(asdf:load-system :$(1) :force t)'
+
 # ── Phony targets ─────────────────────────────────────────────────────────
 .PHONY: help load force-load fast-load fast-force-load load-summary test test-summary clean \
         check-quicklisp check-sbcl \
@@ -284,7 +304,7 @@ build-info:
 force-load: check-quicklisp check-sbcl build-info
 	@echo "Force-reloading $(PROJECT_SYSTEM)..."
 	$(call capture-output,force-load,$(SBCL_RUN) \
-	  --eval '(ql:quickload :$(PROJECT_SYSTEM) :force t)') ; \
+	  $(call force-forms,$(PROJECT_SYSTEM))) ; \
 	RC=$$?; \
 	if grep -qE "caught (fatal )?(ERROR|WARNING)" $(LOAD_OUTPUT); then \
 	  echo "ERROR: Force-load had errors — see $(LOAD_OUTPUT) for details"; \
@@ -310,7 +330,7 @@ fast-load: check-quicklisp check-sbcl
 fast-force-load: check-quicklisp check-sbcl
 	@echo "Fast force-reloading $(PROJECT_SYSTEM)..."
 	$(call capture-output,fast-force-load,$(SBCL_QL) \
-	  --eval '(ql:quickload :$(PROJECT_SYSTEM) :force t)') ; \
+	  $(call force-forms,$(PROJECT_SYSTEM))) ; \
 	RC=$$?; \
 	if grep -qE "caught (fatal )?(ERROR|WARNING)" $(OUTPUT_DIR)fast-force-load-LATEST.txt; then \
 	  echo "ERROR: Force-load had errors — see $(OUTPUT_DIR)fast-force-load-LATEST.txt for details"; \
@@ -352,7 +372,7 @@ ifdef GOLDEN_PACKAGE
 generate-goldens: check-quicklisp check-sbcl
 	@echo "Generating goldens for $(PROJECT_SYSTEM)..."
 	@$(SBCL_RUN) \
-	  --eval '(ql:quickload :$(TEST_SYSTEM) :force t)' \
+	  $(call force-forms,$(TEST_SYSTEM)) \
 	  --eval "(setf $(GOLDEN_PACKAGE):*update-goldens* t)" \
 	  --eval "(setf $(GOLDEN_PACKAGE):*update-pixel-goldens* t)" \
 	  --eval '(let ((cl-user::*exit-on-test-failures* t)) (declare (special cl-user::*exit-on-test-failures*)) (asdf:test-system :$(PROJECT_SYSTEM)))' \
@@ -408,8 +428,8 @@ TEST_EVAL = (let ((cl-user::*exit-on-test-failures* nil)) (declare (special cl-u
 PARACHUTE_EXIT_EVAL = (eval (quote (defparameter cl-user::*exit-on-test-failures* t)))
 test: check-quicklisp check-sbcl
 	$(call capture-output,test,$(SBCL_RUN) \
-	  --eval '(ql:quickload :$(PROJECT_SYSTEM) :force t)' \
-	  --eval '(ql:quickload :$(TEST_SYSTEM) :force t)' \
+	  $(call force-forms,$(PROJECT_SYSTEM)) \
+	  $(call force-forms,$(TEST_SYSTEM)) \
 	  --eval '$(TEST_EVAL)') ; \
 	RC=$$?; \
 	TEST_SUMMARY_PATTERN='$(TEST_SUMMARY_PATTERN)' TEST_REQUIRE_SUMMARY=$(TEST_REQUIRE_SUMMARY) \
@@ -463,8 +483,8 @@ ifdef PKG
 .PHONY: test-package
 test-package: check-quicklisp check-sbcl
 	$(call capture-output,test-package,$(SBCL_RUN) \
-	  --eval '(ql:quickload :$(PROJECT_SYSTEM) :force t)' \
-	  --eval '(ql:quickload :$(TEST_SYSTEM) :force t)' \
+	  $(call force-forms,$(PROJECT_SYSTEM)) \
+	  $(call force-forms,$(TEST_SYSTEM)) \
 	  --eval '$(PARACHUTE_EXIT_EVAL)' \
 	  --eval '$(TEST_PACKAGE_EVAL)') ; \
 	RC=$$?; \
@@ -488,8 +508,8 @@ endif
 test-eval: check-quicklisp check-sbcl
 	$(file >$(TEST_EVAL_TMP),$(EVAL))
 	$(call capture-output,test-eval,$(SBCL_RUN) \
-	  --eval '(ql:quickload :$(PROJECT_SYSTEM) :force t)' \
-	  --eval '(ql:quickload :$(TEST_SYSTEM) :force t)' \
+	  $(call force-forms,$(PROJECT_SYSTEM)) \
+	  $(call force-forms,$(TEST_SYSTEM)) \
 	  --eval '$(PARACHUTE_EXIT_EVAL)' \
 	  --load $(TEST_EVAL_TMP)) ; \
 	RC=$$?; \
@@ -634,7 +654,7 @@ build: force-load
 	@echo "  $(BINARY_NAME): $(PROJECT_VERSION) @ $(BUILD_GIT_SHA) ($(BUILD_GIT_BRANCH), $(BUILD_GIT_DIRTY))"
 	$(file >$(BUILD_PRE_DUMP_TMP),$(BUILD_PRE_DUMP_FORM))
 	@$(SBCL_RUN) \
-	  --eval '(ql:quickload :$(BUILD_SYSTEM) :force t)' \
+	  $(call force-forms,$(BUILD_SYSTEM)) \
 	  --load $(BUILD_PRE_DUMP_TMP) \
 	  --eval '(asdf:make :$(BUILD_SYSTEM))'
 	@mkdir -p $(BINARY_PATH)
