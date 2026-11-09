@@ -206,6 +206,8 @@ GATE_RECEIPT_VERSION ?= 1
 # change what a gate does, so it must change the digest.
 GATE_INPUTS_ALWAYS ?= Makefile .cl-make
 GATE_INPUTS_DEFAULT ?= .
+# Extra basename globs pruned from every walk.  A glob WITH A SLASH is a path
+# (dart/build prunes exactly that tree, not every directory called build).
 GATE_EXCLUDES ?=
 GATE_STAMPS_ALWAYS ?=
 # Sibling repos are inputs: ASDF loads them through (:tree PARENT_DIR), so a

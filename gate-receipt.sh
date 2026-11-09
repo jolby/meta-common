@@ -161,12 +161,18 @@ abs_under_root() {
 }
 
 # find(1) prefix that prunes the exclusion globs at any depth.
+# A glob with a slash is a PATH (relative to whatever is being walked), e.g.
+# dart/build, so it cannot hide a directory of the same name elsewhere; a bare
+# glob is a basename, e.g. *.fasl.
 prune_args() {
   local first=1 g
   PRUNE=( \( )
   for g in "${DEFAULT_EXCLUDES[@]}" "${EXCLUDES[@]+"${EXCLUDES[@]}"}"; do
     [ "$first" -eq 1 ] || PRUNE+=( -o )
-    PRUNE+=( -name "$g" )
+    case "$g" in
+      */*) PRUNE+=( -path "*/$g" ) ;;
+      *)   PRUNE+=( -name "$g" ) ;;
+    esac
     first=0
   done
   PRUNE+=( \) -prune -o )
@@ -544,13 +550,33 @@ EOS
   d2=$(digest_gate green "${opts[@]}" --stamp variant=two 2>/dev/null)
   check "9  an extra stamp changes the digest"                    "$(is "$([ "$d1" != "$d2" ] && echo 0 || echo 1)")"
 
-  # ── 10. a cache that cannot be written must not break the gate ────────
+  # ── 10. a slash exclude is a PATH, not a basename ─────────────────────
+  mkdir -p "$ROOT/build/keep" "$ROOT/sub/build"
+  printf 'keep-me\n' >"$ROOT/build/keep/k.txt"
+  printf 'not-me\n' >"$ROOT/sub/build/k.txt"
+  local xin=( "${opts[@]}" --input build --input sub )
+  d1=$(digest_gate excl "${xin[@]}" 2>/dev/null)
+  d2=$(digest_gate excl "${xin[@]}" --exclude build 2>/dev/null)
+  check "10a a bare glob 'build' prunes every build dir"         \
+        "$(is "$([ "$d1" != "$d2" ] && echo 0 || echo 1)")"
+  d1=$(digest_gate excl "${xin[@]}" --exclude build/keep 2>/dev/null)
+  printf 'changed\n' >"$ROOT/build/keep/k.txt"
+  d2=$(digest_gate excl "${xin[@]}" --exclude build/keep 2>/dev/null)
+  check "10b the path exclude 'build/keep' hides that dir"        \
+        "$(is "$([ "$d1" = "$d2" ] && echo 0 || echo 1)")"
+  printf 'changed\n' >"$ROOT/sub/build/k.txt"
+  d2=$(digest_gate excl "${xin[@]}" --exclude build/keep 2>/dev/null)
+  check "10c the path exclude does not hide sub/build"            \
+        "$(is "$([ "$d1" != "$d2" ] && echo 0 || echo 1)")"
+  rm -rf "$ROOT/build" "$ROOT/sub"
+
+  # ── 11. a cache that cannot be written must not break the gate ────────
   : >"$SCRATCH/notadir"
   : >"$COUNT"
   try_gate readonly "${opts[@]}" --cache "$SCRATCH/notadir" \
     -- "$FAKE" "$COUNT" "$LOG" 0 >/dev/null 2>&1
   rc=$?
-  check "10 an unwritable cache still runs the gate and exits 0"  \
+  check "11 an unwritable cache still runs the gate and exits 0"  \
         "$(is "$([ "$(wc -l <"$COUNT")" -eq 1 ] && [ "$rc" -eq 0 ] && echo 0 || echo 1)")"
 
   echo ""

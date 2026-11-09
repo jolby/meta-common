@@ -102,7 +102,7 @@ demo: check-quicklisp
 | =TEST_REQUIRE_SUMMARY= | =yes=                       | Set to =no= to drop the "did the suite run" gate |
 | =GATE_CACHE_DIR=       | =$(PROJECT_DIR)/.gate-cache= | Receipt store (machine-local derived state)  |
 | =GATE_INPUTS_<gate>=   | =GATE_INPUTS_DEFAULT= (=.=) | Files a gate's digest is computed over        |
-| =GATE_EXCLUDES=        | /empty/                     | Extra basename globs pruned from every walk   |
+| =GATE_EXCLUDES=        | /empty/                     | Extra globs pruned from every walk (a glob with a =/= is a path) |
 | =GATE_STAMPS_<gate>=   | /empty/                     | Extra =name=value= digest inputs for a gate   |
 | =GATE_RECEIPT_SIBLINGS= | =$(PARENT_DIR)=            | Sibling repos walked into the digest          |
 | =FORCE=                | /empty/                     | =FORCE=1= re-runs a gate with a matching receipt |
@@ -336,7 +336,7 @@ Digest inputs, and the traps that must stay handled:
 - =work/=, =tmp/=, =.git/=, =.gate-cache/=, =*.fasl=, =*.db= and
   =.dart_tool/= are excluded: derived state.
 - A project with a large generated tree adds it to =GATE_EXCLUDES=, e.g.
-  =GATE_EXCLUDES += dart/build=.  Do not narrow =GATE_INPUTS_DEFAULT= to make
+  =GATE_EXCLUDES := dart/build=.  Do not narrow =GATE_INPUTS_DEFAULT= to make
   a digest cheap: a narrower default was measured to miss a root-level test
   file, which is a false hit.
 - =capture-output= writes the RUN's timestamp into the log header.  A restored
