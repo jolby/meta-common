@@ -50,12 +50,15 @@ log_for() {
 }
 
 # run_make <fixture-dir> <make-args...> — sets RC; terminal output to a file.
+# FORCE=1 is deliberate: gate receipts (bd-sbf) would otherwise answer the
+# second run from a cached log, and this script's whole job is to make the
+# verdict run.  A self-check satisfied by a stale receipt checks nothing.
 run_make() {
   local dir=$1
   shift
   local term_log
   term_log="/tmp/$(basename "$dir")-$1-terminal.txt"
-  (cd "$dir" && make "$@" SBCL="$SBCL_BIN" QL="$QL_PATH") >"$term_log" 2>&1
+  (cd "$dir" && FORCE=1 make "$@" SBCL="$SBCL_BIN" QL="$QL_PATH") >"$term_log" 2>&1
   RC=$?
 }
 

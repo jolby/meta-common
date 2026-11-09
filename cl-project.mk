@@ -177,6 +177,51 @@ else
   SBCL_RUN = $(SBCL_CMD) $(SBCL_FLAGS) $(QL_BOOT) $(ASDF_BOOT)
 endif
 
+# ── Gate receipts (bd-sbf) ────────────────────────────────────────────────
+# A gate whose declared inputs are unchanged since its last GREEN run must not
+# run again, and must still leave the log a reader inspects.  The receipt tool
+# and the invariants it enforces are documented in gate-receipt.sh.
+#
+# Shape: each cached gate keeps its recipe verbatim under <gate>-uncached and
+# gains a one-line wrapper.  On a miss the target therefore behaves EXACTLY as
+# it did before receipts existed (same capture-output, same -LATEST.txt, same
+# verdict), so receipts cannot move a verdict through a changed recipe.
+#
+# Inputs are declared per gate as GATE_INPUTS_<gate>.  The default is the WHOLE
+# project: a narrower default ("src test data *.asd") was measured to miss a
+# root-level test file, which is a false hit — the one failure a receipt must
+# never have.  Wide is cheap here (a few hundred files); a project with a large
+# generated tree declares it in GATE_EXCLUDES instead of narrowing the inputs.
+#
+#   make cache-status        what is cached, and where each log lives
+#   make cache-clean         drop every receipt (GATE=<name> for one)
+#   make FORCE=1 <gate>      re-run even on a matching receipt
+#   make gate-selftest       prove the tool still honours its invariants
+#   make test-receipts       prove the wiring below end to end
+GATE_RECEIPT ?= $(abspath $(_CL_MK_DIR)gate-receipt.sh)
+GATE_CACHE_DIR ?= $(PROJECT_DIR)/.gate-cache
+# Bump to invalidate every receipt in this project (digest format change).
+GATE_RECEIPT_VERSION ?= 1
+# The recipe and the shared make layer are always inputs: editing either can
+# change what a gate does, so it must change the digest.
+GATE_INPUTS_ALWAYS ?= Makefile .cl-make
+GATE_INPUTS_DEFAULT ?= .
+GATE_EXCLUDES ?=
+GATE_STAMPS_ALWAYS ?=
+# Sibling repos are inputs: ASDF loads them through (:tree PARENT_DIR), so a
+# changed sibling checkout must invalidate this project's receipts.
+GATE_RECEIPT_SIBLINGS ?= $(PARENT_DIR)
+GATE_RECEIPT_SIBLINGS_ARG = $(if $(strip $(GATE_RECEIPT_SIBLINGS)),--siblings '$(GATE_RECEIPT_SIBLINGS)',--no-siblings)
+# Command-line variants of a gate: `PKG=:a` and `PKG=:b` write the same log
+# path, so they MUST be distinguished by the digest or a hit returns the other
+# run's verdict.  Exported so a makefile-defined default is visible too.
+GATE_STAMP_ENVS ?= PKG REPORT EVAL
+export PKG REPORT EVAL
+
+# The one-line wrapper a cached gate's recipe starts with.  One line on
+# purpose: a multi-line define would split the recipe and lose the command.
+gate-receipt-prefix = $(GATE_RECEIPT) run $(1) --root '$(PROJECT_DIR)' --cache '$(GATE_CACHE_DIR)' --cache-version $(GATE_RECEIPT_VERSION) --log '$(2)' $(addprefix --input ,$(GATE_INPUTS_ALWAYS) $(or $(GATE_INPUTS_$(1)),$(GATE_INPUTS_DEFAULT))) $(addprefix --exclude ,$(GATE_EXCLUDES) $(or $(GATE_EXCLUDES_$(1)),)) $(addprefix --stamp ,$(GATE_STAMPS_ALWAYS) $(or $(GATE_STAMPS_$(1)),)) $(addprefix --stamp-env ,$(GATE_STAMP_ENVS)) --sbcl '$(SBCL)' $(GATE_RECEIPT_SIBLINGS_ARG) --
+
 # ── Output capture macro ──────────────────────────────────────────────────
 # Capture stdout+stderr of a command to a timestamped output file.
 # Pipefail (.SHELLFLAGS) ensures the exit code of the wrapped command
@@ -236,7 +281,8 @@ force-forms = $(LOAD_FORCE_EXTRA) --eval '(ql:quickload :$(1))' \
 .PHONY: help load force-load fast-load fast-force-load load-summary test test-summary clean \
         check-quicklisp check-sbcl \
         build install demo build-info \
-        test-eval test-trust lint \
+        test-eval test-trust lint test-receipts \
+        test-uncached test-eval-uncached cache-status cache-clean gate-selftest \
         fresh-build summarize build-report
 
 # Conditional phony targets
@@ -270,10 +316,14 @@ help:
 	@echo "  make demo-<name>    - Load system and run dev/<name>.lisp"
 	@echo "  make test           - Run tests, capture output to $(TEST_OUTPUT)"
 	@echo "  make test-summary   - Show test results from last run"
-	@echo "  make test-trust     - Self-check that the test verdict can be trusted"
-	@echo "  make test-package PKG=:pkg  - Run single test package (dots or slashes in the name both work)"
+	@echo "  make test-trust     - Self-check that the test verdict can be trusted"	@echo "  make test-package PKG=:pkg  - Run single test package (dots or slashes in the name both work)"
 	@echo "  make test-eval EVAL=\"(form)\"  - Run arbitrary test form"
 	@echo "  make lint           - Fail on undefined-symbol warnings from src/ (not part of test)"
+	@echo "  make cache-status   - What gate receipts are cached (VERBOSE=1 for detail)"
+	@echo "  make cache-clean    - Drop every gate receipt (GATE=<name> for one)"
+	@echo "  make gate-selftest  - Prove the receipt tool still honours its invariants"	@echo ""
+	@echo "Gates are receipted: a second run with unchanged inputs restores the log"
+	@echo "instead of running (FORCE=1 to override, make cache-clean to reset)."
 	@echo "  make clean          - Remove fasls and SBCL cache"
 	@if [ -n "$(BINARY_NAME)" ]; then \
 	  echo "  make build          - Build binary → $(BINARY_PATH)/$(BINARY_NAME)"; \
@@ -437,6 +487,9 @@ TEST_EVAL = (let ((cl-user::*exit-on-test-failures* nil)) (declare (special cl-u
 # there is no abort banner.)
 PARACHUTE_EXIT_EVAL = (eval (quote (defparameter cl-user::*exit-on-test-failures* t)))
 test: check-quicklisp check-sbcl
+	@$(call gate-receipt-prefix,test,$(TEST_OUTPUT)) $(MAKE) --no-print-directory test-uncached
+
+test-uncached: check-quicklisp check-sbcl
 	$(call capture-output,test,$(SBCL_RUN) \
 	  $(call force-forms,$(PROJECT_SYSTEM)) \
 	  $(call force-forms,$(TEST_SYSTEM)) \
@@ -444,6 +497,21 @@ test: check-quicklisp check-sbcl
 	RC=$$?; \
 	TEST_SUMMARY_PATTERN='$(TEST_SUMMARY_PATTERN)' TEST_REQUIRE_SUMMARY=$(TEST_REQUIRE_SUMMARY) \
 	  bash $(TEST_VERDICT_SH) --target test --require-summary $(TEST_OUTPUT) $$RC
+
+# ── Gate receipts: the tool's own checks ──────────────────────────────────
+# selftest is the deliverable, not a nicety: it proves a red gate is never
+# receipted, a hit does not execute the command, the -LATEST.txt comes back
+# byte-for-byte, one changed byte forces a miss, FORCE wins, clean works, and
+# that the per-run regeneration of build-info.sexp does NOT change the digest
+# (the trap that would silently disable every receipt).
+gate-selftest:
+	@bash $(GATE_RECEIPT) selftest
+
+cache-status:
+	@$(GATE_RECEIPT) status --cache '$(GATE_CACHE_DIR)' $(if $(VERBOSE),--verbose,)
+
+cache-clean:
+	@$(GATE_RECEIPT) clean --cache '$(GATE_CACHE_DIR)' $(or $(GATE),--all)
 
 test-summary:
 	@grep -E "Suite:|Summary:|Passed:|Failed:|Skipped:|Plan:|VERDICT:" $(TEST_OUTPUT) 2>/dev/null | tail -20 \
@@ -460,6 +528,15 @@ test-summary:
 # cl-project.mk can run the same self-check.
 test-trust: check-quicklisp check-sbcl
 	@bash $(_CL_MK_DIR)test-trust.sh "$(_CL_MK_DIR)" "$(SBCL)" "$(QL)"
+
+# ── Receipt self-check ────────────────────────────────────────────────────
+# Proves the receipt wiring in cl-project.mk end to end: the second identical
+# run must not start an SBCL process, must restore the -LATEST.txt
+# byte-for-byte, must respect FORCE=1 and cache-clean, must key test-package by
+# PKG and test-eval by EVAL, and must never receipt a red gate.  `make test`
+# twice on your own project is the other half of the proof — do it once.
+test-receipts: check-quicklisp check-sbcl
+	@bash $(_CL_MK_DIR)test-receipts.sh "$(_CL_MK_DIR)" "$(SBCL)" "$(QL)"
 
 # ── Targeted testing ──────────────────────────────────────────────────────
 # Run a single test package via parachute.
@@ -490,8 +567,11 @@ TEST_PACKAGE_EVAL = (let* ((designator $(PKG)) \
                             (target (if pkg pkg designator))) \
                       (parachute:test target$(if $(REPORT), :report (quote $(REPORT)))))
 ifdef PKG
-.PHONY: test-package
+.PHONY: test-package test-package-uncached
 test-package: check-quicklisp check-sbcl
+	@$(call gate-receipt-prefix,test-package,$(TEST_PACKAGE_OUTPUT)) $(MAKE) --no-print-directory test-package-uncached
+
+test-package-uncached: check-quicklisp check-sbcl
 	$(call capture-output,test-package,$(SBCL_RUN) \
 	  $(call force-forms,$(PROJECT_SYSTEM)) \
 	  $(call force-forms,$(TEST_SYSTEM)) \
@@ -514,8 +594,11 @@ ifneq (,$(filter test-eval,$(MAKECMDGOALS)))
     $(error EVAL is required. Usage: make test-eval EVAL="(form)")
   endif
 endif
-.PHONY: test-eval
+.PHONY: test-eval test-eval-uncached
 test-eval: check-quicklisp check-sbcl
+	@$(call gate-receipt-prefix,test-eval,$(TEST_EVAL_OUTPUT)) $(MAKE) --no-print-directory test-eval-uncached
+
+test-eval-uncached: check-quicklisp check-sbcl
 	$(file >$(TEST_EVAL_TMP),$(EVAL))
 	$(call capture-output,test-eval,$(SBCL_RUN) \
 	  $(call force-forms,$(PROJECT_SYSTEM)) \
