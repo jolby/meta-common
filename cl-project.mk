@@ -219,7 +219,17 @@ endef
 # Used by force-load, fast-force-load, test, test-package, test-eval, generate-goldens
 # and build. Loading starts at ~1s warm; forcing a project this size costs a few seconds
 # of compile, which is the price of the report meaning what it says.
-force-forms = --eval '(ql:quickload :$(1))' \
+#
+# A project whose DEPENDENCY tree emits compile warnings that ASDF treats as a failed
+# compile -- CFFI's claw-generated bindings are the known case -- can downgrade that
+# decision for the load, because a dependency's warning is not this project's bug:
+#
+#   LOAD_FORCE_EXTRA := --eval '(setf asdf:*compile-file-failure-behaviour* :warn)'
+#
+# `make lint` still covers the project's own code: it greps the compile log for
+# undefined symbols, which is what bd-a8r's detector is, and the suite still runs.
+LOAD_FORCE_EXTRA ?=
+force-forms = $(LOAD_FORCE_EXTRA) --eval '(ql:quickload :$(1))' \
               --eval '(asdf:load-system :$(1) :force t)'
 
 # ── Phony targets ─────────────────────────────────────────────────────────
