@@ -302,7 +302,11 @@ run_gate() {
         printf '%s: cached (%ss, %s) — log: %s\n' \
           "$GATE" "$(cat "$dir/elapsed" 2>/dev/null || echo '?')" "$d8" "$LOG"
         local v
-        v=$(grep -E '^=== VERDICT:|^Passed:|^Failed:' "$LOG" 2>/dev/null | tail -1)
+        # The gate's own last word: "=== VERDICT: PASS ===" for the test
+        # targets, "<gate>: N demo(s), PASS" for the parity gates, "All tests
+        # passed!" for the Dart one.  Printing only "cached" would tell a
+        # reader the log exists but not what it says.
+        v=$(grep -v '^[[:space:]]*$' "$LOG" 2>/dev/null | tail -1)
         [ -n "$v" ] && printf '  %s\n' "$v"
         exit 0
       elif [ "$(cat "$dir/log_state" 2>/dev/null)" = none ]; then
@@ -501,6 +505,7 @@ EOS
   check "2c a hit exits 0"                                      "$(is "$rc")"
   check "2d a hit does not execute the command"                  "$(is "$([ ! -s "$COUNT" ] && echo 0 || echo 1)")"
   check "2e a hit says 'cached' and names the log"               "$(is "$(printf '%s' "$out" | grep -q "cached.*$LOG" && echo 0 || echo 1)")"
+  check "2f a hit repeats the log's last line (its verdict)"      "$(is "$(printf '%s' "$out" | grep -q 'Failed:  0' && echo 0 || echo 1)")"
   check "3  a hit restores the log byte-for-byte"                "$(is "$(cmp -s "$LOG" "$SCRATCH/log.expected" && echo 0 || echo 1)")"
   rm -f "$LOG"
   try_gate green "${opts[@]}" -- "$FAKE" "$COUNT" "$LOG" 0 >/dev/null 2>&1
