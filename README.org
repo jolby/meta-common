@@ -339,9 +339,12 @@ Digest inputs, and the traps that must stay handled:
   =GATE_EXCLUDES := dart/build=.  Do not narrow =GATE_INPUTS_DEFAULT= to make
   a digest cheap: a narrower default was measured to miss a root-level test
   file, which is a false hit.
-- A stamp value is passed as ONE argument, so a version banner with spaces and
-  symbols is fine: `GATE_STAMPS_dump-index-check = flutter=$(shell $(FLUTTER)
-  --version | head -1)`. It must not contain a single quote.
+- A stamp value must be ONE WORD. Make splits `GATE_STAMPS_<gate>` into words
+  before the recipe reaches the shell, so `flutter=Flutter 3.47.2 • channel …`
+  arrives as five stamps (`flutter=Flutter`, `3.47.2`, `channel`, …) — silently,
+  which is the dangerous part. Write a token, not a banner:
+  `GATE_STAMPS_dump-index-check = flutter=$(shell $(FLUTTER) --version | head -1
+  | cut -d' ' -f2)` gives `flutter=3.47.2`.
 - Makefile-DEFINED settings are already in the digest (the Makefile is an input).
   `GATE_STAMP_ENVS` exists for what can be typed on the COMMAND LINE: `PKG`,
   `REPORT`, `EVAL`, `DYNAMIC_SPACE_SIZE`, and any selector a project's gates read
