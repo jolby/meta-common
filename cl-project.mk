@@ -217,12 +217,25 @@ GATE_RECEIPT_SIBLINGS_ARG = $(if $(strip $(GATE_RECEIPT_SIBLINGS)),--siblings '$
 # Command-line variants of a gate: `PKG=:a` and `PKG=:b` write the same log
 # path, so they MUST be distinguished by the digest or a hit returns the other
 # run's verdict.  Exported so a makefile-defined default is visible too.
-GATE_STAMP_ENVS ?= PKG REPORT EVAL
-export PKG REPORT EVAL
+# Command-line variants and other overrides that change WHAT a gate examines or
+# HOW it decides.  Makefile-DEFINED settings are already covered (the Makefile
+# is an input), so this list exists for what can be typed on the command line:
+#   PKG/REPORT  which test package, and its report mode
+#   EVAL        the test form itself
+#   DYNAMIC_SPACE_SIZE  the heap a gate runs in (a smaller heap turns a pass
+#                       into an out-of-memory failure)
+# A project adds its own selectors with `GATE_STAMP_ENVS += RP_SCENES` and
+# `export RP_SCENES`.  The rule: if it can be overridden on the command line and
+# it changes the gate, it belongs here.
+GATE_STAMP_ENVS ?= PKG REPORT EVAL DYNAMIC_SPACE_SIZE
+export PKG REPORT EVAL DYNAMIC_SPACE_SIZE
 
 # The one-line wrapper a cached gate's recipe starts with.  One line on
 # purpose: a multi-line define would split the recipe and lose the command.
-gate-receipt-prefix = $(GATE_RECEIPT) run $(1) --root '$(PROJECT_DIR)' --cache '$(GATE_CACHE_DIR)' --cache-version $(GATE_RECEIPT_VERSION) --log '$(2)' $(addprefix --input ,$(GATE_INPUTS_ALWAYS) $(or $(GATE_INPUTS_$(1)),$(GATE_INPUTS_DEFAULT))) $(addprefix --exclude ,$(GATE_EXCLUDES) $(or $(GATE_EXCLUDES_$(1)),)) $(addprefix --stamp ,$(GATE_STAMPS_ALWAYS) $(or $(GATE_STAMPS_$(1)),)) $(addprefix --stamp-env ,$(GATE_STAMP_ENVS)) --sbcl '$(SBCL)' $(GATE_RECEIPT_SIBLINGS_ARG) --
+# Stamp values are QUOTED one by one (GATE_STAMPS_<gate> = flutter=$(shell ...)
+# produces a value with spaces, and an unquoted one would sheer into several
+# argv words).
+gate-receipt-prefix = $(GATE_RECEIPT) run $(1) --root '$(PROJECT_DIR)' --cache '$(GATE_CACHE_DIR)' --cache-version $(GATE_RECEIPT_VERSION) --log '$(2)' $(addprefix --input ,$(GATE_INPUTS_ALWAYS) $(or $(GATE_INPUTS_$(1)),$(GATE_INPUTS_DEFAULT))) $(addprefix --exclude ,$(GATE_EXCLUDES) $(or $(GATE_EXCLUDES_$(1)),)) $(foreach st,$(GATE_STAMPS_ALWAYS) $(or $(GATE_STAMPS_$(1)),),--stamp '$(st)') $(addprefix --stamp-env ,$(GATE_STAMP_ENVS)) --sbcl '$(SBCL)' $(GATE_RECEIPT_SIBLINGS_ARG) --
 
 # ── Output capture macro ──────────────────────────────────────────────────
 # Capture stdout+stderr of a command to a timestamped output file.
