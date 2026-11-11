@@ -98,7 +98,7 @@ demo: check-quicklisp
 | =SBCL_HOME=            | /empty/                     | Custom SBCL_HOME for custom SBCL builds       |
 | =QL=                   | =~/quicklisp/setup.lisp=    | Quicklisp setup.lisp path                     |
 | =ASDF_SOURCE_REGISTRY= | =yes=                       | Set to =no= for faster Quicklisp-only startup |
-| =TEST_SUMMARY_PATTERN= | Parachute + FiveAM summary  | What "the suite actually ran" looks like       |
+| =TEST_SUMMARY_PATTERN= | ==^(;; Summary:)==          | What "the suite actually ran" looks like. Parachute's heading ONLY — other frameworks' marker lines ("Running test suite", "Did N checks") are refused on purpose, so an unsupported framework fails loudly (bd-phe) |
 | =TEST_REQUIRE_SUMMARY= | =yes=                       | Set to =no= to drop the "did the suite run" gate |
 | =GATE_CACHE_DIR=       | =$(PROJECT_DIR)/.gate-cache= | Receipt store (machine-local derived state)  |
 | =GATE_INPUTS_<gate>=   | =GATE_INPUTS_DEFAULT= (=.=) | Files a gate's digest is computed over        |
@@ -243,10 +243,16 @@ available.
   =PKG=agent-loop-suite=) pass through unchanged.
 
 - =make test-eval EVAL="(form)"= — Run any test expression.  Works with
-  Parachute, FiveAM, or custom test entry points.  /No quoting issues:/ the
+  Parachute or any custom test entry point.  /No quoting issues:/ the
   form is written to a temp file via Make's =$(file ...)= and loaded with
   =--load=, completely bypassing shell quoting.  Single quotes, double
   quotes, nested forms — all fine.
+
+  /Not= a way to judge an unsupported framework: =test-eval= deliberately does
+  not require a test summary (it runs an arbitrary form), so a framework whose
+  report =test-verdict.sh= cannot read will look green here even when its suite
+  failed.  FiveAM is exactly that case (bd-phe); a real suite belongs in
+  =make test= or =make test-package=, which do require a Parachute summary.
 
 #+begin_src makefile
 # Run a specific test package:
@@ -258,10 +264,7 @@ make test-package PKG=:my-project.test.smoke REPORT=interactive
 # Run a full package via test-eval (same as test-package above):
 make test-eval EVAL="(parachute:test :my-project.test)"
 
-# FiveAM suite:
-make test-eval EVAL="(5am:run! :smoke)"
-
-# Custom entry point with quoted symbols and strings:
+# A custom entry point with quoted symbols and strings:
 make test-eval EVAL="(my-tests:run-single 'test-foo :verbose t)"
 make test-eval EVAL='(format t "hello world")'
 #+end_src

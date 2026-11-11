@@ -14,6 +14,10 @@
 #   synthetic logs     one gate at a time (counted failure,
 #                      ✘, Failures block, no summary, bad
 #                      command exit, missing log)            -> each FAIL
+#                      plus FIVEAM: its "Did N checks" summary is
+#                      not evidence that a suite passed, so a
+#                      fiveam log FAILs whether it reports
+#                      "Fail: 2" or "Fail: 0" (bd-phe)
 #
 # The eval-fail case also asserts that the counters really do lie ("Passed: 1"
 # with "Failed: 0"), so the check cannot silently stop exercising the trap.
@@ -144,6 +148,25 @@ synth failures "$GREEN\n;; Failures:\n  0/0 tests failed in PKG::T"
 check "a ;; Failures: block exits non-zero"                  "$(is "$([ "$VRC" -ne 0 ] && echo 0 || echo 1)")"
 synth no-summary "=== x ===\n; Loading \"foo\""
 check "a log with no summary exits non-zero"                 "$(is "$([ "$VRC" -ne 0 ] && echo 0 || echo 1)")"
+# bd-phe.  MEASURED here before it was fixed: a fiveam log whose summary was
+# "Fail: 2" satisfied the summary gate (the pattern accepted "Did N checks") and
+# failed none of the parachute detectors, so the verdict was PASS — and
+# gate-receipt.sh stored that PASS.  The pattern no longer accepts fiveam, so
+# the summary gate is what catches it, and the REASON must say so: a fiveam log
+# carries no ✘ and no ";; Failures:", so failing for any other reason would mean
+# some unrelated detector fired.
+FIVEAM_FAIL="Running test suite SMOKE\n Did 52 checks.\n    Pass: 50 ( 96%)\n    Skip: 0 (  0%)\n    Fail: 2 (  3%)"
+synth fiveam-fail "$FIVEAM_FAIL"
+check "a fiveam 'Fail: 2' summary exits non-zero"             "$(is "$([ "$VRC" -ne 0 ] && echo 0 || echo 1)")"
+check "...and fails on the summary, not on an unrelated pattern" \
+      "$(is "$(grep -q 'no test summary' "$SYNTH/fiveam-fail.txt" && echo 0 || echo 1)")"
+# The clean fiveam case pins the DECISION rather than the symptom: this project
+# does not read fiveam's report at all, so even "Fail: 0" is not a pass.  A
+# future agent who re-adds "Did N checks" to the pattern turns this check red,
+# which is exactly the conversation to have before a fiveam repo can come back.
+synth fiveam-clean "Running test suite SMOKE\n Did 52 checks.\n    Pass: 52 (100%)\n    Skip: 0 (  0%)\n    Fail: 0 (  0%)"
+check "a CLEAN fiveam summary also exits non-zero (unsupported ≠ passing)" \
+      "$(is "$([ "$VRC" -ne 0 ] && echo 0 || echo 1)")"
 synth green "$GREEN" 7
 check "a non-zero command exit fails an otherwise green log" "$(is "$([ "$VRC" -ne 0 ] && echo 0 || echo 1)")"
 bash "${CL_MK_DIR%/}/test-verdict.sh" --target test "$SYNTH/does-not-exist.txt" 0 >/dev/null 2>&1

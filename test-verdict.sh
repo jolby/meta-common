@@ -61,7 +61,24 @@ RC=${2:-0}
 # What a framework's summary line looks like.  Override for a project whose
 # test framework prints something else (or set TEST_REQUIRE_SUMMARY=no to
 # drop the "did the suite run at all" gate).
-SUMMARY_PATTERN=${TEST_SUMMARY_PATTERN:-^(;; Summary:|Total:|Running test suite| *Did [0-9]+ checks?)}
+#
+# FIVEAM IS DELIBERATELY NOT ACCEPTED (bd-phe), and neither is any other
+# framework's marker line.  The default pattern used to be
+# `^(;; Summary:|Total:|Running test suite)` — "Running test suite" is fiveam's,
+# and accepting it let a fiveam suite satisfy "it ran" while every failure
+# detector below (a "^Failed:" counter, a ";; Failures:" block, "failed to
+# evaluate properly", and the ✘ glyph) speaks PARACHUTE's dialect and could not
+# see fiveam's failures.  render-stack-sdl3 printed "Fail: 2 ( 3%)", this
+# script wrote PASS, and gate-receipt.sh recorded that PASS as a green receipt:
+# a FALSE GREEN, receipted — the one outcome this project cannot absorb.
+#
+# So the default is parachute's own heading, `;; Summary:`.  An unsupported
+# framework now fails LOUDLY with "no test summary in the log — the suite did
+# not run", which is the safe direction and costs nothing: a project on another
+# framework overrides TEST_SUMMARY_PATTERN and adds its failure shapes to the
+# detectors below.  Proven, not asserted: test-trust.sh's synthetic-log section
+# feeds a fiveam report in, failing and clean, and requires FAIL.
+SUMMARY_PATTERN=${TEST_SUMMARY_PATTERN:-^(;; Summary:)}
 
 reasons=()
 add_reason() { reasons+=("$1"); }

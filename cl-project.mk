@@ -41,7 +41,10 @@
 #   PROJECT_SYSTEM        ASDF system name (REQUIRED)
 #   TEST_SYSTEM           ASDF test system (default: PROJECT_SYSTEM/tests)
 #   BUILD_SYSTEM          ASDF system holding program-op (default: PROJECT_SYSTEM)
-#   TEST_FRAMEWORK        asdf, parachute, or fiveam (default: asdf)
+#   TEST_FRAMEWORK        VESTIGIAL: nothing reads it.  The test targets call
+#                         Parachute directly, which is the only framework
+#                         test-verdict.sh can judge a result from (bd-phe); a
+#                         fiveam project converts rather than switches this.
 #   EXTRA_ASDF_DIRS       Additional dirs to add to source registry
 #   EXTRA_ASDF_TREES      Additional :tree entries for source registry
 #   GOLDEN_PACKAGE        Package prefix for update-goldens (enables generate-goldens)
@@ -473,8 +476,20 @@ endif
 # log; a log with no summary line is a FAIL for test/test-package.  Set
 # TEST_REQUIRE_SUMMARY=no to drop that gate, or override the pattern for a
 # framework that prints something else.
+#
+# PARACHUTE IS THE ONLY FRAMEWORK THIS ACCEPTS, on purpose (bd-phe).  The
+# default used to be `^(;; Summary:|Total:|Running test suite)` plus fiveam's
+# "Did N checks" — three marker lines from three different reports, only one of
+# which (parachute's `;; Summary:`) this tool can also read FAILURES from.  That
+# made every other framework satisfy the "did it run" gate and none of them the
+# "did it fail" gate: a fiveam "Fail: 2" was recorded as a PASS and receipted.
+# The default is now parachute's own heading, which is the one line that comes
+# from the framework this project standardised on (bd-w0a).  A project on
+# something else overrides TEST_SUMMARY_PATTERN *and* teaches test-verdict.sh
+# its failure shapes — while it does neither, it fails loudly with "no test
+# summary in the log", which is the safe direction.
 TEST_VERDICT_SH := $(_CL_MK_DIR)test-verdict.sh
-TEST_SUMMARY_PATTERN ?= ^(;; Summary:|Total:|Running test suite| *Did [0-9]+ checks?)
+TEST_SUMMARY_PATTERN ?= ^(;; Summary:)
 TEST_REQUIRE_SUMMARY ?= yes
 
 # ── Test ───────────────────────────────────────────────────────────────────
@@ -597,12 +612,13 @@ test-package-uncached: check-quicklisp check-sbcl
 	  bash $(TEST_VERDICT_SH) --target test-package --require-summary $(TEST_PACKAGE_OUTPUT) $$RC
 endif
 
-# Run any test expression.  Works with any framework.
+# Run any test expression.  Works with any framework — but test-eval does NOT
+# require a test summary, so it cannot JUDGE a framework whose report
+# test-verdict.sh cannot read (fiveam: bd-phe).  Use test/test-package for that.
 # Run any test expression.  Bypasses shell quoting via $(file).
 # Works with single quotes, double quotes, any Lisp form.
 #   make test-eval EVAL="(parachute:test :my-pkg 'some-sym)"
 #   make test-eval EVAL="(format t \"hello\")"
-#   make test-eval EVAL="(5am:run! :smoke)"
 # Only enforce when test-eval is the actual target (not at parse time).
 ifneq (,$(filter test-eval,$(MAKECMDGOALS)))
   ifeq (,$(EVAL))

@@ -555,6 +555,24 @@ EOS
   d2=$(digest_gate green "${opts[@]}" --stamp variant=two 2>/dev/null)
   check "9  an extra stamp changes the digest"                    "$(is "$([ "$d1" != "$d2" ] && echo 0 || echo 1)")"
 
+  # ── 9b-d. --stamp-env: set, unset, and an unset value that is RECORDED ──
+  # bd-8dn.  GATE_STAMP_ENVS is applied to EVERY gate (PKG, REPORT, EVAL,
+  # DYNAMIC_SPACE_SIZE and whatever a project adds), so the unset case is the
+  # common one and it has to behave like a value, not like an absence: if an
+  # unset name were dropped from the manifest, the stamp would be a silent
+  # no-op for every gate that does not set it and 9d's line is what says so.
+  # MEASURED, the two digests below differ only in this variable.
+  d1=$(unset BEAD8DN_VAR; digest_gate green "${opts[@]}" --stamp-env BEAD8DN_VAR 2>/dev/null)
+  d2=$(BEAD8DN_VAR=a digest_gate green "${opts[@]}" --stamp-env BEAD8DN_VAR 2>/dev/null)
+  check "9b --stamp-env: a set value changes the digest"          \
+        "$(is "$([ "$d1" != "$d2" ] && echo 0 || echo 1)")"
+  d2=$(unset BEAD8DN_VAR; digest_gate green "${opts[@]}" --stamp-env BEAD8DN_VAR 2>/dev/null)
+  check "9c --stamp-env: an UNSET value is stable (deterministic)"  \
+        "$(is "$([ "$d1" = "$d2" ] && echo 0 || echo 1)")"
+  man=$(unset BEAD8DN_VAR; digest_gate green "${opts[@]}" --stamp-env BEAD8DN_VAR --verbose 2>/dev/null)
+  check "9d --stamp-env: an UNSET value is RECORDED empty, not dropped" \
+        "$(is "$(printf '%s\n' "$man" | grep -qE '^stamp BEAD8DN_VAR=$' && echo 0 || echo 1)")"
+
   # ── 10. a slash exclude is a PATH, not a basename ─────────────────────
   mkdir -p "$ROOT/build/keep" "$ROOT/sub/build"
   printf 'keep-me\n' >"$ROOT/build/keep/k.txt"
