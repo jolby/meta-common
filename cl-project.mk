@@ -289,8 +289,13 @@ endef
 #
 #   LOAD_FORCE_EXTRA := --eval '(setf asdf:*compile-file-failure-behaviour* :warn)'
 #
-# `make lint` still covers the project's own code: it greps the compile log for
-# undefined symbols, which is what bd-a8r's detector is, and the suite still runs.
+# EVERY force-load honours it, `make lint` included. That is deliberate and was not
+# always true (bd-twd): lint used to force-load WITHOUT this variable, so a project
+# that declared a tolerance was still killed by the first warning -- and because a
+# warning is what a docstring that swallows its body produces, the ONE check that
+# exists to catch that class (bd-a8r) died before reaching the file. The tolerance
+# is a project's declaration about its own build; a check that ignores it is
+# stricter than the build it checks, and its silence means nothing.
 LOAD_FORCE_EXTRA ?=
 force-forms = $(LOAD_FORCE_EXTRA) --eval '(ql:quickload :$(1))' \
               --eval '(asdf:load-system :$(1) :force t)'
@@ -666,6 +671,23 @@ test-eval-uncached: check-quicklisp check-sbcl
 # Deliberately NOT a prerequisite of test: it force-loads the whole system, which costs
 # seconds on every run. `make lint` is a pre-commit check.
 #
+# THE FORCE-LOAD IS THE FAILURE MODE (bd-twd). Lint's value is entirely in reaching the
+# files; if the load stops at file N, every file after N is unlinted and "no warnings
+# found" is a lie by omission. So:
+#   * the load runs with :ON-FAILURE :WARN, so a file that merely PRODUCED a warning
+#     is reported and the check continues. This is unconditional, and deliberately not
+#     left to a project to declare: the one warning that blinded this check was
+#     limited-box's generated `:type double-float :initform nil`, and no project would
+#     ever declare "my own generated slot warns" as a tolerance. A detector that any
+#     warning can switch off is not a detector, and the one thing lint must never do is
+#     report "no warnings found" about files it never reached;
+#   * a load that still fails is FATAL (exit $$RC; nothing was checked), because
+#     `:on-failure` only downgrades a failed compile, never a compile that produced no
+#     fasl at all;
+#   * $(LOAD_FORCE_EXTRA) is still honoured, so a project's own tolerance (it can also
+#     suppress a dependency's) applies here exactly as it does in test and load;
+#   * `make lint-trust` is the standing proof of all of it, on fixture projects.
+#
 # The quickload before the force-recompile also loads every file, so an intra-system
 # forward reference (a file using a special the next file defines) is already bound when
 # it is recompiled and is not reported. That is deliberate: it is a different bug class
@@ -680,14 +702,26 @@ LINT_SOURCE_DIR ?= src
 .PHONY: lint
 lint: check-quicklisp check-sbcl
 	$(call capture-output,lint,$(SBCL_RUN) \
+	  $(LOAD_FORCE_EXTRA) \
 	  --eval '(ql:quickload :$(PROJECT_SYSTEM))' \
-	  --eval '(asdf:load-system :$(PROJECT_SYSTEM) :force t)') ; \
+	  --eval '(asdf:load-system :$(PROJECT_SYSTEM) :force t :on-failure :warn)') ; \
 	RC=$$?; \
 	if [ $$RC -ne 0 ]; then \
 	  echo ""; \
-	  echo "lint: the force-load itself failed (exit $$RC) -- warnings are not the problem:"; \
+	  echo "lint: the force-load itself FAILED (exit $$RC) -- nothing was checked."; \
+	  echo "      This is a compile ERROR (or a dependency's), not a warning about your"; \
+	  echo "      own source; fix it first, or declare the tolerance with"; \
+	  echo "      LOAD_FORCE_EXTRA -- lint honours it, exactly as test and load do:"; \
 	  tail -20 $(OUTPUT_DIR)lint-LATEST.txt; \
 	  exit $$RC; \
+	fi; \
+	DEGRADED=$$(grep -c 'Lisp compilation failed while' $(OUTPUT_DIR)lint-LATEST.txt 2>/dev/null || true); \
+	case "$$DEGRADED" in ''|*[!0-9]*) DEGRADED=0 ;; esac; \
+	if [ "$$DEGRADED" -gt 0 ]; then \
+	  echo "lint: $$DEGRADED file(s) compiled with WARNINGS that lint tolerates on purpose"; \
+	  echo "      (see the 'caught WARNING' blocks in $(OUTPUT_DIR)lint-LATEST.txt). They"; \
+	  echo "      are reported here and NOT fatal, because the check below still covers"; \
+	  echo "      every file AFTER them -- which is the point (bd-twd)."; \
 	fi; \
 	HITS=$$(awk '/^; file: /{file=$$0} /[Uu]ndefined (variable|function)/{ \
 	               if (file ~ /\/$(LINT_SOURCE_DIR)\//) printf "%s\n    %s\n", file, $$0 }' \
@@ -703,7 +737,20 @@ lint: check-quicklisp check-sbcl
 	  printf '%s\n' "$$HITS"; \
 	  exit 1; \
 	fi; \
-	echo "lint: no undefined-symbol warnings from $(LINT_SOURCE_DIR)/ ($(OUTPUT_DIR)lint-LATEST.txt)"
+	echo "lint: no undefined-symbol warnings from $(LINT_SOURCE_DIR)/ ($$DEGRADED file(s) with tolerated compile warnings) ($(OUTPUT_DIR)lint-LATEST.txt)"
+
+# `make lint-trust` — is the docstring detector still a detector? (bd-twd)
+# Runs the REAL lint target against fixture projects in test-fixtures/, the same way
+# test-trust drives the real test targets:
+#   lint-warns       a compile WARNING and no trap            -> GREEN, and the log
+#                                                              must show the warning
+#   lint-warns-trap  the same warning, then a docstring that
+#                    swallows its body                        -> RED, naming the file
+# Without the first, the second could be red because the load died, not because the
+# trap was found -- which is the exact confusion bd-twd was.
+.PHONY: lint-trust
+lint-trust: check-quicklisp check-sbcl
+	@bash $(_CL_MK_DIR)lint-trust.sh "$(_CL_MK_DIR)" "$(SBCL)" "$(QL)"
 
 # ── Clean ──────────────────────────────────────────────────────────────────
 # SBCL caches fasls under ~/.cache/common-lisp/<version>/<full-absolute-path>
