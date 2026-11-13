@@ -66,6 +66,8 @@ demo: check-quicklisp
 | =make test=        | Run tests, capture output, compute the PASS/FAIL verdict |
 | =make test-summary= | Show test results from the last =make test=          |
 | =make test-trust=  | Self-check that the test verdict can be trusted      |
+| =make lint=        | Fail on undefined-symbol warnings from =src/=        |
+| =make lint-trust=  | Self-check that =make lint= still detects a docstring trap |
 | =make test-receipts= | Self-check that gate receipts are wired correctly  |
 | =make gate-selftest= | Self-check the receipt tool's own invariants      |
 | =make cache-status= | What gate receipts are cached, and their logs        |
@@ -80,6 +82,35 @@ demo: check-quicklisp
 | =make build=       | Build binary → =bin/<name>= (requires =BINARY_NAME=) |
 | =make install=     | Install binary to =$(INSTALL_DIR)= (requires =BINARY_NAME=) |
 | =make generate-goldens= | Regenerate golden test files (requires =GOLDEN_PACKAGE=) |
+
+** Compiler-Warning Lint — =make lint= (bd-a8r, bd-twd)
+
+A docstring that quotes a phrase with a plain double quote ENDS at that quote.
+The rest of the sentence becomes body forms, so the function still compiles and
+signals only the first time it runs. Parenthesis checkers, CST parsers and
+structural editors all accept such a file; the compiler's own
+"undefined variable" warning is the only cheap detector, so =make lint= greps
+the compile log for it and fails if it is attributed to a file under
+=$(LINT_SOURCE_DIR)= (default =src=).
+
+The failure mode is the force-load, not the grep. If the load stops at file N,
+every file after N is unlinted and "no warnings found" is a lie by omission —
+which is what happened for two sessions: a GENERATED slot in =limited-box=
+warned, ASDF called that a failed compile, and the load died before reaching
+the files a Material text-field author edits (bd-twd). So:
+
+- the force-load runs with =:on-failure :warn=. A file that PRODUCED a warning
+  is reported and the check continues. This is unconditional: no project would
+  declare "my own generated slot warns" as a tolerance, and a detector any
+  warning can switch off is not a detector.
+- =LOAD_FORCE_EXTRA= is still honoured, so a project's own tolerance applies
+  here exactly as in =test= and =load=.
+- a load that still fails is FATAL (=:on-failure= downgrades a failed compile,
+  never a compile that produced no fasl) and nothing is claimed about the code.
+- =make lint-trust= proves all of it on fixture projects: a warning with
+  nothing to find is GREEN and says how many files it tolerated; the same
+  warning followed by a docstring trap is RED and names the file; the trap
+  alone is RED too.
 
 ** Overrideable Variables
 
@@ -100,6 +131,9 @@ demo: check-quicklisp
 | =ASDF_SOURCE_REGISTRY= | =yes=                       | Set to =no= for faster Quicklisp-only startup |
 | =TEST_SUMMARY_PATTERN= | ==^(;; Summary:)==          | What "the suite actually ran" looks like. Parachute's heading ONLY — other frameworks' marker lines ("Running test suite", "Did N checks") are refused on purpose, so an unsupported framework fails loudly (bd-phe) |
 | =TEST_REQUIRE_SUMMARY= | =yes=                       | Set to =no= to drop the "did the suite run" gate |
+| =LOAD_FORCE_EXTRA=     | /empty/                     | Extra =--eval= forms for every force-load (=load=, =test=, =lint=, ...). The documented use is =--eval '(setf asdf:*compile-file-failure-behaviour* :warn)'= for a dependency whose warnings ASDF would treat as a failed compile (CFFI claw bindings). It applies to =lint= too: a check that ignores a project's declared tolerance is stricter than the build it checks |
+| =LINT_SOURCE_DIR=      | =src=                       | Only undefined-symbol warnings from files under this directory fail =make lint= |
+| =LINT_ALLOWED=         | /empty/                     | Symbol substrings to tolerate in =make lint= — a real false positive only, say why |
 | =GATE_CACHE_DIR=       | =$(PROJECT_DIR)/.gate-cache= | Receipt store (machine-local derived state)  |
 | =GATE_INPUTS_<gate>=   | =GATE_INPUTS_DEFAULT= (=.=) | Files a gate's digest is computed over        |
 | =GATE_EXCLUDES=        | /empty/                     | Extra globs pruned from every walk (a glob with a =/= is a path) |
