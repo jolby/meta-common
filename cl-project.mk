@@ -110,8 +110,15 @@ PARENT_DIR := $(abspath $(PROJECT_DIR)/..)
 # $(lastword $(MAKEFILE_LIST)) is this file (cl-project.mk).
 # Scripts (fresh-build.lisp, summarize-build.lisp) are siblings in the
 # same directory.  _CL_MK_DIR provides the path to them.
+#
+# ABSOLUTE on purpose: the include line is relative in a project's Makefile
+# (`.cl-make/cl-project.mk`), so `$(dir ...)` used to hand every self-check a
+# RELATIVE directory — fine for a script the project itself runs, but wrong for
+# anything that cds elsewhere, which is what the trust scripts' fixtures do
+# (bd-twd: lint-trust's standalone project, in a mktemp dir, included
+# `.cl-make/cl-project.mk` and had none).
 _CL_MK_SELF := $(lastword $(MAKEFILE_LIST))
-_CL_MK_DIR := $(dir $(_CL_MK_SELF))
+_CL_MK_DIR := $(abspath $(dir $(_CL_MK_SELF)))/
 
 # ── Build info (version.sexp pattern) ──────────────────────────────────────
 # Generated into BUILD_INFO_FILE before every load/build so Lisp load-time
