@@ -120,6 +120,14 @@ run_make "$FIXTURES/verdict-pass" test-eval 'EVAL=(format t "~&trivial form ran.
 check "test-eval: exits 0"                                   "$(is "$RC")"
 check "test-eval: log says PASS"                             "$(is "$(verdict_is "$LOG" PASS; echo $?)")"
 check "test-eval: the verdict line is the log's last line"    "$(is "$(verdict_is_last "$LOG"; echo $?)")"
+# A `$name` inside the form must reach Lisp unchanged. A command-line variable
+# is recursively expanded, so `$(EVAL)` would expand the form a second time and
+# read `$path` as make variable `path`: the form arrives corrupted, silently
+# (bd-rov). Cypher parameters are the usual casualty.
+LOG=$(log_for "$FIXTURES/verdict-pass" test-eval)
+run_make "$FIXTURES/verdict-pass" test-eval 'EVAL=(format t "~&dollar=~S.~%" "$path")'
+check "test-eval: a dollar name in the form reaches Lisp intact" \
+      "$(is "$(grep -qF 'dollar="$path"' "$LOG"; echo $?)")"
 
 # ── 6. The verdict script's own gates, on synthetic logs ──────────────────
 echo "[6/6] test-verdict.sh — one gate at a time, no Lisp involved"

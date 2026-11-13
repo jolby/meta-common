@@ -619,6 +619,10 @@ endif
 # Works with single quotes, double quotes, any Lisp form.
 #   make test-eval EVAL="(parachute:test :my-pkg 'some-sym)"
 #   make test-eval EVAL="(format t \"hello\")"
+# $(value EVAL), not $(EVAL): a command-line variable is recursively expanded,
+# so $(EVAL) would expand a second time and read a `$path` in the form as a
+# reference to make variable `path` -- the form would arrive corrupted, with
+# no warning. Cypher parameters are the usual casualty (bd-rov).
 # Only enforce when test-eval is the actual target (not at parse time).
 ifneq (,$(filter test-eval,$(MAKECMDGOALS)))
   ifeq (,$(EVAL))
@@ -630,7 +634,7 @@ test-eval: check-quicklisp check-sbcl
 	@$(call gate-receipt-prefix,test-eval,$(TEST_EVAL_OUTPUT)) $(MAKE) --no-print-directory test-eval-uncached
 
 test-eval-uncached: check-quicklisp check-sbcl
-	$(file >$(TEST_EVAL_TMP),$(EVAL))
+	$(file >$(TEST_EVAL_TMP),$(value EVAL))
 	$(call capture-output,test-eval,$(SBCL_RUN) \
 	  $(call force-forms,$(PROJECT_SYSTEM)) \
 	  $(call force-forms,$(TEST_SYSTEM)) \
