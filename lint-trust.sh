@@ -102,13 +102,15 @@ check "lint-warns-trap: not red for 'the force-load itself FAILED'" \
 # ── 3. The same trap with no warning in front of it: still RED ────────────
 echo "[3/3] a trap with no warning in front of it — must also FAIL"
 STANDALONE=$(mktemp -d /tmp/lint-trust-standalone.XXXXXX)
-cp "$FIXTURES/lint-warns/Makefile" "$STANDALONE/Makefile"
-# The fixture's Makefile says lint-warns and includes ../../cl-project.mk, which
-# is only correct inside the fixtures tree; point the copy at the real file.
-sed -i 's/^PROJECT_SYSTEM := lint-warns$/PROJECT_SYSTEM := lint-standalone/' \
-  "$STANDALONE/Makefile"
-sed -i 's|include \.\./\.\./cl-project\.mk|include '"${CL_MK_DIR%/}"'/cl-project.mk|' \
-  "$STANDALONE/Makefile"
+# A Makefile WRITTEN here, not copied and sed-ed: the fixtures' Makefiles include
+# ../../cl-project.mk, which is only correct inside the fixtures tree, and a sed
+# that misses leaves make looking for a path that is not there. Quotes around the
+# include path would be part of the name make looks for, so there are none.
+cat >"$STANDALONE/Makefile" <<STANDALONE_MK
+PROJECT_SYSTEM := lint-standalone
+ASDF_SOURCE_REGISTRY := yes
+include ${CL_MK_DIR%/}/cl-project.mk
+STANDALONE_MK
 mkdir -p "$STANDALONE/src"
 cp "$FIXTURES/lint-warns-trap/src/trap.lisp" "$STANDALONE/src/trap.lisp"
 cp "$FIXTURES/lint-warns/src/clean.lisp" "$STANDALONE/src/clean.lisp"
