@@ -167,6 +167,7 @@ the files a Material text-field author edits (bd-twd). So:
 | =LINT_SOURCE_DIR=     | =src=                       | Legacy one-directory alias for =LINT_SOURCE_DIRS=, consulted only when that is unset |
 | =LINT_EXTRA_SYSTEMS=  | /empty/                     | Extra ASDF systems (a rig, a test system) that =make lint= force-loads too — a directory is only checked if something compiles it |
 | =LINT_ALLOWED=         | /empty/                     | Symbol substrings to tolerate in =make lint= — a real false positive only, say why |
+| =TEST_ALTERNATIVE=     | /empty/                     | Target named when =$(TEST_SYSTEM)= does not exist, so `make test` can say where the suite actually lives |
 | =GATE_CACHE_DIR=       | =$(PROJECT_DIR)/.gate-cache= | Receipt store (machine-local derived state)  |
 | =GATE_INPUTS_<gate>=   | =GATE_INPUTS_DEFAULT= (=.=) | Files a gate's digest is computed over        |
 | =GATE_EXCLUDES=        | /empty/                     | Extra globs pruned from every walk (a glob with a =/= is a path) |
@@ -281,11 +282,46 @@ all.  That last gate is what stops =make test= from reporting success on a
 suite that never ran (a system whose =test-op= does nothing exits 0 and
 prints no summary).
 
-=make test-trust= is the regression test for all of this.  It runs three
+=make test-trust= is the regression test for all of this.  It runs four
 fixture systems in =test-fixtures/= through the real targets and asserts
 that a green suite PASSes, that a suite whose only failure is an unevaluated
-test FAILs (while its counters still say =Failed: 0=), and that a suite
-that never ran FAILs too.  Run it after changing any of this machinery.
+test FAILs (while its counters still say =Failed: 0=), that a suite
+that never ran FAILs too, and that a project with no suite says so instead of
+failing (37 checks, ~60 s).  Run it after changing any of this machinery.
+
+** A project with no test system (bd-wf7)
+
+=make test= force-loads =$(TEST_SYSTEM)= and then runs ASDF's test-op.  In a
+project where that system does not exist, the load signalled
+=SYSTEM-NOT-FOUND=, nothing ran, and the verdict was =FAIL= with "no test summary
+in the log" — a red gate that says nothing about the code and that no change to
+the code can ever turn green.  A target nobody can pass is a target everybody
+learns to ignore.
+
+So the first form of the recipe ASKS ASDF whether =$(TEST_SYSTEM)= exists.  If it
+does not, the target prints three plain sentences, exits 0, and writes **no
+verdict line** — because there is no run to judge — and =make test-summary=
+repeats that instead of claiming the log is missing:
+
+#+begin_example
+test: NO TEST SYSTEM in this repo — my-project/tests does not exist.
+      The suite here is `make codegen-test`.
+      no assertions were run, so there is nothing to summarize.
+#+end_example
+
+| Variable            | Default   | Meaning |
+|---------------------+-----------+---------|
+| =TEST_ALTERNATIVE=  | /empty/   | The target that DOES run this project's suite, named in that message.  A plain target name: =TEST_ALTERNATIVE := codegen-test= |
+
+ASDF answers authoritatively on purpose.  Grepping the =.asd= files for a
+=/tests= system is the tempting shortcut and is wrong: a test system can be
+defined in another system's =.asd= (=mcclim-render-stack= defines its whole
+family in one file), it need not be spelled =/tests= (=render-parity= uses
+=/test=), and it can be found through the source registry rather than in the
+project directory.  =make test-trust='s seventh case pins all of it: a fixture
+with no suite must exit 0, name the missing system, point at
+=TEST_ALTERNATIVE=, carry no verdict line, and not be described by
+=test-summary= as a log that does not exist.
 
 /If your project defines its own =test:= target, none of the above applies to
 it./  Either call =test-verdict.sh= yourself at the end of the recipe, or do

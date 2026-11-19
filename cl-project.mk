@@ -528,15 +528,43 @@ TEST_EVAL = (let ((cl-user::*exit-on-test-failures* nil)) (declare (special cl-u
 # (test-package/test-eval call parachute:test directly, not via ASDF, so
 # there is no abort banner.)
 PARACHUTE_EXIT_EVAL = (eval (quote (defparameter cl-user::*exit-on-test-failures* t)))
+
+# ── A repo with no test system (bd-wf7) ───────────────────────────────────
+# `test` force-loads $(TEST_SYSTEM) and then runs ASDF's test-op. When that
+# system does not exist the load signals SYSTEM-NOT-FOUND, nothing else runs, and
+# the verdict is FAIL with "no test summary in the log": a red gate that says
+# nothing about the code and that no change to the code can ever turn green. A
+# target nobody can pass is a target everybody learns to ignore, so the first
+# form ASKS ASDF whether the system exists and, when it does not, prints one plain
+# sentence and exits 0 before any load is attempted. The recipe recognises that
+# sentence and skips the verdict, because there is no run to judge.
+#
+# ASDF answers this authoritatively. Grepping the .asd files for a /tests system
+# is the tempting alternative and is WRONG: a test system can be defined in
+# another system's .asd (mcclim-render-stack defines /tests and /test-rig in the
+# same file as the library, and render-parity's is named /test, singular), and a
+# system can also be found through the source registry rather than in this repo.
+#
+# TEST_ALTERNATIVE names the target that DOES run this project's suite, so the
+# sentence points at it instead of leaving the reader to guess which gate matters
+# here. It is a plain target name: `TEST_ALTERNATIVE := codegen-test`.
+TEST_ALTERNATIVE ?=
+NO_TEST_SYSTEM_MARKER := test: NO TEST SYSTEM
+NO_TEST_SYSTEM_HINT = $(if $(strip $(TEST_ALTERNATIVE)),The suite here is `make $(TEST_ALTERNATIVE)`.,No TEST_ALTERNATIVE is declared, so this project names no other gate.)
+TEST_SYSTEM_GUARD = (unless (asdf:find-system "$(TEST_SYSTEM)" nil) (format t "~&$(NO_TEST_SYSTEM_MARKER) in this repo — $(TEST_SYSTEM) does not exist.~%      $(NO_TEST_SYSTEM_HINT)~%      no assertions were run, so there is nothing to summarize.~%") (sb-ext:exit :code 0))
 test: check-quicklisp check-sbcl
 	@$(call gate-receipt-prefix,test,$(TEST_OUTPUT)) $(MAKE) --no-print-directory test-uncached
 
 test-uncached: check-quicklisp check-sbcl
 	$(call capture-output,test,$(SBCL_RUN) \
+	  --eval '$(TEST_SYSTEM_GUARD)' \
 	  $(call force-forms,$(PROJECT_SYSTEM)) \
 	  $(call force-forms,$(TEST_SYSTEM)) \
 	  --eval '$(TEST_EVAL)') ; \
 	RC=$$?; \
+	if grep -qF '$(NO_TEST_SYSTEM_MARKER)' $(TEST_OUTPUT) 2>/dev/null; then \
+	  exit 0; \
+	fi; \
 	TEST_SUMMARY_PATTERN='$(TEST_SUMMARY_PATTERN)' TEST_REQUIRE_SUMMARY=$(TEST_REQUIRE_SUMMARY) \
 	  bash $(TEST_VERDICT_SH) --target test --require-summary $(TEST_OUTPUT) $$RC
 
@@ -556,8 +584,18 @@ cache-clean:
 	@$(GATE_RECEIPT) clean --cache '$(GATE_CACHE_DIR)' $(or $(GATE),--all)
 
 test-summary:
-	@grep -E "Suite:|Summary:|Passed:|Failed:|Skipped:|Plan:|VERDICT:" $(TEST_OUTPUT) 2>/dev/null | tail -20 \
-	  || echo "No test output at $(TEST_OUTPUT). Run 'make test' first."
+	@if grep -qF '$(NO_TEST_SYSTEM_MARKER)' $(TEST_OUTPUT) 2>/dev/null; then \
+	  echo "test-summary: this repo has no test system — there is no suite to report."; \
+	  grep -A3 -F "$(NO_TEST_SYSTEM_MARKER)" $(TEST_OUTPUT) | sed 's/^/  /'; \
+	elif [ -f $(TEST_OUTPUT) ]; then \
+	  if grep -qE "Suite:|Summary:|Passed:|Failed:|Skipped:|Plan:|VERDICT:" $(TEST_OUTPUT); then \
+	    grep -E "Suite:|Summary:|Passed:|Failed:|Skipped:|Plan:|VERDICT:" $(TEST_OUTPUT) | tail -20; \
+	  else \
+	    echo "No summary in $(TEST_OUTPUT) — the run reported none. See the log."; \
+	  fi; \
+	else \
+	  echo "No test output at $(TEST_OUTPUT). Run 'make test' first."; \
+	fi
 
 # ── Verdict self-check ────────────────────────────────────────────────────
 # Runs the fixture systems in test-fixtures/ through the real test targets and

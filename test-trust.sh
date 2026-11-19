@@ -11,6 +11,12 @@
 #   verdict-no-suite   system whose test-op runs nothing    -> FAIL, exit != 0
 #   verdict-eval-fail  test-package (direct parachute call) -> FAIL in the log
 #   verdict-pass       test-eval with a trivial form        -> PASS, exit 0
+#   no-test-system     a project whose <system>/tests does
+#                      NOT exist (bd-wf7): the target used
+#                      to force-load it, die with
+#                      SYSTEM-NOT-FOUND and report FAIL      -> says NO TEST
+#                      SYSTEM, points at TEST_ALTERNATIVE,
+#                      exits 0, and writes NO verdict line
 #   synthetic logs     one gate at a time (counted failure,
 #                      ✘, Failures block, no summary, bad
 #                      command exit, missing log)            -> each FAIL
@@ -78,7 +84,7 @@ verdict_is_last() {
 echo "== test-trust: fixtures under $FIXTURES =="
 
 # ── 1. A genuinely green suite: PASS, exit 0 ──────────────────────────────
-echo "[1/6] verdict-pass / make test — must PASS"
+echo "[1/7] verdict-pass / make test — must PASS"
 LOG=$(log_for "$FIXTURES/verdict-pass" test)
 run_make "$FIXTURES/verdict-pass" test
 check "verdict-pass: make test exits 0"                      "$(is "$RC")"
@@ -86,7 +92,7 @@ check "verdict-pass: log says PASS"                          "$(is "$(verdict_is
 check "verdict-pass: the verdict line is the log's last line" "$(is "$(verdict_is_last "$LOG"; echo $?)")"
 
 # ── 2. Only failure is a test that failed to evaluate: FAIL, exit != 0 ────
-echo "[2/6] verdict-eval-fail / make test — must FAIL"
+echo "[2/7] verdict-eval-fail / make test — must FAIL"
 LOG=$(log_for "$FIXTURES/verdict-eval-fail" test)
 run_make "$FIXTURES/verdict-eval-fail" test
 check "verdict-eval-fail: make test exits non-zero"          "$(is "$([ "$RC" -ne 0 ] && echo 0 || echo 1)")"
@@ -97,7 +103,7 @@ check "verdict-eval-fail: parachute's counters still lie (Failed: 0)"      "$(is
 check "verdict-eval-fail: the verdict names the real reason" "$(is "$(grep -q 'failed to evaluate properly' "$LOG" && grep -q '^=== VERDICT reasons ===' "$LOG"; echo $?)")"
 
 # ── 3. A suite that never ran: FAIL, exit != 0 ────────────────────────────
-echo "[3/6] verdict-no-suite / make test — must FAIL"
+echo "[3/7] verdict-no-suite / make test — must FAIL"
 LOG=$(log_for "$FIXTURES/verdict-no-suite" test)
 run_make "$FIXTURES/verdict-no-suite" test
 check "verdict-no-suite: make test exits non-zero"           "$(is "$([ "$RC" -ne 0 ] && echo 0 || echo 1)")"
@@ -106,7 +112,7 @@ check "verdict-no-suite: the verdict names the missing suite" "$(is "$(grep -q '
 check "verdict-no-suite: nothing in the log claims success"  "$(is "$(grep -qE '=== Exit: 0|VERDICT: PASS' "$LOG" && echo 1 || echo 0)")"
 
 # ── 4. test-package: same trap, direct parachute call ─────────────────────
-echo "[4/6] verdict-eval-fail / make test-package — must FAIL in the log"
+echo "[4/7] verdict-eval-fail / make test-package — must FAIL in the log"
 LOG=$(log_for "$FIXTURES/verdict-eval-fail" test-package)
 run_make "$FIXTURES/verdict-eval-fail" test-package PKG=":verdict-eval-fail/tests"
 check "test-package: exits non-zero"                         "$(is "$([ "$RC" -ne 0 ] && echo 0 || echo 1)")"
@@ -114,7 +120,7 @@ check "test-package: log says FAIL"                          "$(is "$(verdict_is
 check "test-package: the verdict line is the log's last line" "$(is "$(verdict_is_last "$LOG"; echo $?)")"
 
 # ── 5. test-eval: arbitrary form, no summary required ─────────────────────
-echo "[5/6] verdict-pass / make test-eval — must PASS without a summary"
+echo "[5/7] verdict-pass / make test-eval — must PASS without a summary"
 LOG=$(log_for "$FIXTURES/verdict-pass" test-eval)
 run_make "$FIXTURES/verdict-pass" test-eval 'EVAL=(format t "~&trivial form ran.~%")'
 check "test-eval: exits 0"                                   "$(is "$RC")"
@@ -129,8 +135,35 @@ run_make "$FIXTURES/verdict-pass" test-eval 'EVAL=(format t "~&dollar=~S.~%" "$p
 check "test-eval: a dollar name in the form reaches Lisp intact" \
       "$(is "$(grep -qF 'dollar="$path"' "$LOG"; echo $?)")"
 
+# ── 7. A project with NO test system: says so, exits 0, writes no verdict ──
+# The trap (bd-wf7): `test` force-loads $(TEST_SYSTEM), the load signals
+# SYSTEM-NOT-FOUND, nothing runs, and the verdict says FAIL with "no test
+# summary in the log". A red gate no change to the code can turn green.
+echo "[6/7] no-test-system / make test — must say so and exit 0"
+LOG=$(log_for "$FIXTURES/no-test-system" test)
+run_make "$FIXTURES/no-test-system" test
+check "no-test-system: make test exits 0"                    "$(is "$RC")"
+check "no-test-system: the log says NO TEST SYSTEM"           "$(is "$(grep -qF 'test: NO TEST SYSTEM' "$LOG"; echo $?)")"
+check "no-test-system: it names the system that is missing"   "$(is "$(grep -qF 'no-test-system/tests does not exist' "$LOG"; echo $?)")"
+check "no-test-system: it points at TEST_ALTERNATIVE"         "$(is "$(grep -qF 'make codegen-test' "$LOG"; echo $?)")"
+check "no-test-system: it says no assertions ran"             "$(is "$(grep -qF 'no assertions were run' "$LOG"; echo $?)")"
+# The distinction that matters. A VERDICT line here would mean the shared target
+# judged a run that never happened; the message must be the whole report.
+check "no-test-system: the log carries NO verdict line"       "$(is "$(grep -q '^=== VERDICT:' "$LOG" && echo 1 || echo 0)")"
+# Captured, not piped: `make test-summary | grep -q` makes grep exit on the
+# first match, the writer takes SIGPIPE, and the check reads 141 instead of the
+# target's status. Reading the text into a variable keeps the target's exit out
+# of it entirely.
+SUMMARY=$( (cd "$FIXTURES/no-test-system" && make test-summary SBCL="$SBCL_BIN" QL="$QL_PATH") 2>/dev/null)
+case "$SUMMARY" in
+  *"has no test system"*) SUMMARY_SAYS_NO_SUITE=0 ;;
+  *)                      SUMMARY_SAYS_NO_SUITE=1 ;;
+esac
+check "no-test-system: test-summary says the same, not 'run make test first'" \
+      "$SUMMARY_SAYS_NO_SUITE"
+
 # ── 6. The verdict script's own gates, on synthetic logs ──────────────────
-echo "[6/6] test-verdict.sh — one gate at a time, no Lisp involved"
+echo "[7/7] test-verdict.sh — one gate at a time, no Lisp involved"
 SYNTH=$(mktemp -d /tmp/test-trust-synth.XXXXXX)
 GREEN="=== x ===
 ;; Summary:
