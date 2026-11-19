@@ -19,6 +19,15 @@
 #                    never reached the trap behind it.
 #   standalone       the same trap with no warning in front of it, so check 2's
 #                    red cannot be an artifact of the warning.
+#   lint-trap-in-test  the trap is in a DIFFERENT ASDF system, in test/, which the
+#                    default scope never compiles and never reports (bd-lnz)
+#                                                             -> RED, exit != 0
+#                    ...and the report must NAME test/trap2.lisp, so the widening
+#                    of BOTH variables — LINT_EXTRA_SYSTEMS (compile it) and
+#                    LINT_SOURCE_DIRS (report it) — is what found it. The same
+#                    fixture is then run with the filter narrowed back to src and
+#                    must be GREEN with the warning still in the log: that is the
+#                    control, and without it a red could be anything.
 #
 # TWO logs matter, and they are different files: capture-output puts SBCL's own
 # output in /tmp/<system>-lint-LATEST.txt, while the target's own messages
@@ -59,19 +68,21 @@ logs_for() {
   TERM="/tmp/$1-lint-terminal.txt"
 }
 
-# run_lint <fixture-dir> — sets RC; terminal output to TERM's file.
+# run_lint <fixture-dir> [extra make assignments...] — sets RC; terminal output
+# to TERM's file. Extra assignments exist for the SCOPE control in case 4, which
+# must compile the same tree with a different filter.
 # FORCE=1 is deliberate even though lint is not receipted today: if it ever
 # gains a receipt, a self-check answered from a cached log would check nothing.
 run_lint() {
-  local dir=$1
-  (cd "$dir" && FORCE=1 make lint SBCL="$SBCL_BIN" QL="$QL_PATH") >"$TERM" 2>&1
+  local dir=$1; shift
+  (cd "$dir" && FORCE=1 make lint SBCL="$SBCL_BIN" QL="$QL_PATH" "$@") >"$TERM" 2>&1
   RC=$?
 }
 
 echo "== lint-trust: fixtures under $FIXTURES =="
 
 # ── 1. A warning with nothing to find: GREEN, and the warning is visible ──
-echo "[1/3] lint-warns / make lint — must PASS despite a compile warning"
+echo "[1/4] lint-warns / make lint — must PASS despite a compile warning"
 logs_for lint-warns
 run_lint "$FIXTURES/lint-warns"
 check "lint-warns: make lint exits 0"                        "$(is "$RC")"
@@ -83,7 +94,7 @@ check "lint-warns: lint SAYS it tolerated a warning, and how many files" \
       "$(is "$(grep -q 'compiled with WARNINGS that lint tolerates on purpose' "$TERM"; echo $?)")"
 
 # ── 2. The classic docstring trap behind a warning: RED, naming the file ──
-echo "[2/3] lint-warns-trap / make lint — must FAIL, naming src/trap.lisp"
+echo "[2/4] lint-warns-trap / make lint — must FAIL, naming src/trap.lisp"
 logs_for lint-warns-trap
 run_lint "$FIXTURES/lint-warns-trap"
 check "lint-warns-trap: make lint exits non-zero"            "$(is "$([ "$RC" -ne 0 ] && echo 0 || echo 1)")"
@@ -100,8 +111,16 @@ check "lint-warns-trap: not red for 'the force-load itself FAILED'" \
       "$(is "$(grep -q 'the force-load itself FAILED' "$TERM" && echo 1 || echo 0)")"
 
 # ── 3. The same trap with no warning in front of it: still RED ────────────
-echo "[3/3] a trap with no warning in front of it — must also FAIL"
-STANDALONE=$(mktemp -d /tmp/lint-trust-standalone.XXXXXX)
+echo "[3/4] a trap with no warning in front of it — must also FAIL"
+# Two levels, not one: the shared Makefile sets the source registry to
+# (:tree PARENT_DIR), and a fixture sitting directly in /tmp makes PARENT_DIR the
+# whole of /tmp. That walk crashed the lint on a HOST artifact (an unpacked
+# transactional-update snapshot with device nodes and dangling symlinks), so the
+# case went red for a reason that had nothing to do with lint. With the project
+# one level down the tree is this fixture's own directory and nothing else.
+STANDALONE_ROOT=$(mktemp -d /tmp/lint-trust-standalone.XXXXXX)
+STANDALONE="$STANDALONE_ROOT/project"
+mkdir -p "$STANDALONE"
 # A Makefile WRITTEN here, not copied and sed-ed: the fixtures' Makefiles include
 # ../../cl-project.mk, which is only correct inside the fixtures tree, and a sed
 # that misses leaves make looking for a path that is not there. Quotes around the
@@ -129,11 +148,37 @@ check "lint-standalone: the report NAMES src/trap.lisp"       \
       "$(is "$(grep -q 'trap\.lisp' "$TERM"; echo $?)")"
 check "lint-standalone: nothing was tolerated (no warning to tolerate)" \
       "$(is "$(grep -q 'compiled with WARNINGS' "$TERM" && echo 1 || echo 0)")"
-rm -rf "$STANDALONE"
+rm -rf "$STANDALONE_ROOT"
+
+# ── 4. The trap in a SEPARATE system, outside the default scope (bd-lnz) ──
+# Every case above lives in src/ and in the primary system, which is the one
+# place lint has always looked. This fixture is the shape of a real rig or test
+# tree: a sibling ASDF system in a directory the default filter does not name.
+# It goes RED only if BOTH LINT_EXTRA_SYSTEMS compiles it and LINT_SOURCE_DIRS
+# admits it — and the control below isolates the filter.
+echo "[4/4] lint-trap-in-test / make lint — must FAIL, naming test/trap2.lisp"
+logs_for lint-trap-in-test
+run_lint "$FIXTURES/lint-trap-in-test"
+check "lint-trap-in-test: make lint exits non-zero"          "$(is "$([ "$RC" -ne 0 ] && echo 0 || echo 1)")"
+check "lint-trap-in-test: the report NAMES test/trap2.lisp"  \
+      "$(is "$(grep -q 'test/trap2\.lisp' "$TERM"; echo $?)")"
+check "lint-trap-in-test: the verdict says it scanned src/ test/" \
+      "$(is "$(grep -q 'undefined-symbol warnings from src/ test/' "$TERM"; echo $?)")"
+check "lint-trap-in-test: the log carries the undefined variable" \
+      "$(is "$(grep -q 'undefined variable: COMMON-LISP-USER::HINT' "$LOG"; echo $?)")"
+
+# The control. Same fixture, same compile, ONE difference: the filter is
+# narrowed back to src. Green here and red above is the widening WORKING. If
+# the warning were missing from the log here, the green would only mean the
+# file was never compiled, and the case would prove nothing.
+run_lint "$FIXTURES/lint-trap-in-test" LINT_SOURCE_DIRS=src
+check "lint-trap-in-test: filter narrowed to src only -> GREEN" "$(is "$RC")"
+check "lint-trap-in-test: ...with the trap STILL COMPILED (warning in the log)" \
+      "$(is "$(grep -q 'undefined variable: COMMON-LISP-USER::HINT' "$LOG"; echo $?)")"
 
 echo ""
 if [ "$failed" -eq 0 ]; then
-  echo "== lint-trust: $checks checks, 0 failed — the docstring detector survives a warning =="
+  echo "== lint-trust: $checks checks, 0 failed — the docstring detector still detects, over every directory it is told to scan =="
   exit 0
 fi
 echo "== lint-trust: $checks checks, $failed FAILED — lint cannot be trusted =="
