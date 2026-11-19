@@ -754,6 +754,10 @@ lint: check-quicklisp check-sbcl
 	  echo "      This is a compile ERROR (or a dependency's), not a warning about your"; \
 	  echo "      own source; fix it first, or declare the tolerance with"; \
 	  echo "      LOAD_FORCE_EXTRA -- lint honours it, exactly as test and load do:"; \
+	  echo ""; \
+	  echo "      last file the compiler reached:"; \
+	  grep -a '; compiling file "' $(OUTPUT_DIR)lint-LATEST.txt | tail -1 | sed 's/^/        /'; \
+	  echo ""; \
 	  tail -20 $(OUTPUT_DIR)lint-LATEST.txt; \
 	  exit $$RC; \
 	fi; \
