@@ -664,10 +664,17 @@ test-eval-uncached: check-quicklisp check-sbcl
 # structural editors all accept such a file -- the compiler's own "undefined variable"
 # warning is the only cheap detector.
 #
-# So: force-load the system, then fail when a warning about an undefined variable or
-# function is attributed to a file under $(LINT_SOURCE_DIR)/. Warnings from other files
-# are ignored on purpose -- structurally aware editors (csct) compile isolated
-# fragments in /tmp and warn about symbols from files they deliberately do not load.
+# So: force-load the systems named by PROJECT_SYSTEM and LINT_EXTRA_SYSTEMS, then fail
+# when a warning about an undefined variable or function is attributed to a file under
+# any directory in LINT_SOURCE_DIRS (default: src). Warnings from other files are
+# ignored on purpose -- structurally aware editors (csct) compile isolated fragments in
+# /tmp and warn about symbols from files they deliberately do not load.
+#
+# THE SCOPE IS TWO VARIABLES, NOT ONE (bd-lnz). A directory only gets checked if some
+# force-loaded system actually compiles it: widening LINT_SOURCE_DIRS without naming the
+# system that owns the directory changes nothing, and naming an extra system without
+# widening the filter compiles the trap and then throws the evidence away. Both halves
+# are needed, and `make lint-trust`'s fourth fixture proves the pair.
 #
 # The recompilation MUST go through ASDF: (ql:quickload :sys :force t) accepts the
 # keyword (its lambda list has &allow-other-keys) and ignores it, so it only compiles
@@ -704,14 +711,42 @@ test-eval-uncached: check-quicklisp check-sbcl
 # LINT_ALLOWED lists symbol substrings that are known and tolerated; keep it empty
 # unless a warning is a real false positive, and say why next to it.
 LINT_ALLOWED ?=
+# WHICH FILES COUNT (bd-lnz). LINT_SOURCE_DIRS is the CANONICAL spelling: a
+# whitespace-separated list, and a hit is reported when the warning's file lies under
+# ANY of them. LINT_SOURCE_DIR is the original one-directory name, kept because every
+# existing project uses it; it is consulted only when LINT_SOURCE_DIRS is unset, so a
+# project can keep saying `LINT_SOURCE_DIR := src` and mean it.
 LINT_SOURCE_DIR ?= src
+LINT_SOURCE_DIRS ?= $(LINT_SOURCE_DIR)
+# WHICH SYSTEMS GET COMPILED (bd-lnz). A project's rig and its test system are ASDF
+# systems in their own right -- siblings of PROJECT_SYSTEM, not components of it -- so
+# nothing else in this Makefile compiles them, and a docstring trap in rig/ or test/ is
+# invisible to a lint that only loads PROJECT_SYSTEM. `make test` happens to force-load
+# TEST_SYSTEM, which is why test/ sometimes gets checked by accident and a separate rig
+# never does. Name them here and the same strict force-load reaches them.
+LINT_EXTRA_SYSTEMS ?=
+
+# Derived from the two variables above. _LINT_DIRS is never empty (an empty
+# LINT_SOURCE_DIRS would make the alternation empty and match every file, as would an
+# empty pattern silently matching nothing). Each extra system gets the same load PAIR
+# the primary system gets: a plain load binds intra-system forward references so the
+# forced pass does not report them as undefined, and the forced pass carries
+# :on-failure :warn for the reason given above.
+_LINT_SPACE := $(subst ,, )
+_LINT_DIRS := $(if $(strip $(LINT_SOURCE_DIRS)),$(strip $(LINT_SOURCE_DIRS)),src)
+LINT_DIR_ALTERNATION := $(subst $(_LINT_SPACE),|,$(_LINT_DIRS))
+LINT_DIR_LABEL := $(foreach d,$(_LINT_DIRS),$(d)/)
+LINT_EXTRA_EVALS := $(foreach s,$(strip $(LINT_EXTRA_SYSTEMS)),\
+                      --eval '(ql:quickload :$(s))' \
+                      --eval '(asdf:load-system :$(s) :force t :on-failure :warn)')
 
 .PHONY: lint
 lint: check-quicklisp check-sbcl
 	$(call capture-output,lint,$(SBCL_RUN) \
 	  $(LOAD_FORCE_EXTRA) \
 	  --eval '(ql:quickload :$(PROJECT_SYSTEM))' \
-	  --eval '(asdf:load-system :$(PROJECT_SYSTEM) :force t :on-failure :warn)') ; \
+	  --eval '(asdf:load-system :$(PROJECT_SYSTEM) :force t :on-failure :warn)' \
+	  $(LINT_EXTRA_EVALS)) ; \
 	RC=$$?; \
 	if [ $$RC -ne 0 ]; then \
 	  echo ""; \
@@ -731,20 +766,20 @@ lint: check-quicklisp check-sbcl
 	  echo "      every file AFTER them -- which is the point (bd-twd)."; \
 	fi; \
 	HITS=$$(awk '/^; file: /{file=$$0} /[Uu]ndefined (variable|function)/{ \
-	               if (file ~ /\/$(LINT_SOURCE_DIR)\//) printf "%s\n    %s\n", file, $$0 }' \
+	               if (file ~ /\/$(LINT_DIR_ALTERNATION)\//) printf "%s\n    %s\n", file, $$0 }' \
 	             $(OUTPUT_DIR)lint-LATEST.txt); \
 	if [ -n "$(LINT_ALLOWED)" ]; then \
 	  HITS=$$(printf '%s\n' "$$HITS" | grep -vF -e "$(LINT_ALLOWED)"); \
 	fi; \
 	if [ -n "$$HITS" ]; then \
 	  echo ""; \
-	  echo "lint: undefined-symbol warnings from $(LINT_SOURCE_DIR)/ -- a docstring probably"; \
+	  echo "lint: undefined-symbol warnings from $(LINT_DIR_LABEL) -- a docstring probably"; \
 	  echo "      ends at an inner double quote (bd-a8r), or a definition is missing:"; \
 	  echo ""; \
 	  printf '%s\n' "$$HITS"; \
 	  exit 1; \
 	fi; \
-	echo "lint: no undefined-symbol warnings from $(LINT_SOURCE_DIR)/ ($$DEGRADED file(s) with tolerated compile warnings) ($(OUTPUT_DIR)lint-LATEST.txt)"
+	echo "lint: no undefined-symbol warnings from $(LINT_DIR_LABEL) ($$DEGRADED file(s) with tolerated compile warnings) ($(OUTPUT_DIR)lint-LATEST.txt)"
 
 # `make lint-trust` — is the docstring detector still a detector? (bd-twd)
 # Runs the REAL lint target against fixture projects in test-fixtures/, the same way
@@ -753,6 +788,11 @@ lint: check-quicklisp check-sbcl
 #                                                              must show the warning
 #   lint-warns-trap  the same warning, then a docstring that
 #                    swallows its body                        -> RED, naming the file
+#   lint-trap-in-test  the trap in a SEPARATE system, in test/, outside the default
+#                    scope (bd-lnz)                            -> RED, naming test/
+#                    ...and the same fixture with LINT_SOURCE_DIRS narrowed back to src
+#                    is GREEN while the warning stays in the log, so the red is provably
+#                    the WIDENING and not the extra system being compiled.
 # Without the first, the second could be red because the load died, not because the
 # trap was found -- which is the exact confusion bd-twd was.
 .PHONY: lint-trust
