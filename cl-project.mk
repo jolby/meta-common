@@ -755,8 +755,13 @@ lint: check-quicklisp check-sbcl
 	  echo "      own source; fix it first, or declare the tolerance with"; \
 	  echo "      LOAD_FORCE_EXTRA -- lint honours it, exactly as test and load do:"; \
 	  echo ""; \
-	  echo "      last file the compiler reached:"; \
-	  grep -a '; compiling file "' $(OUTPUT_DIR)lint-LATEST.txt | tail -1 | sed 's/^/        /'; \
+	  echo "      The file it died in (the tail below is a backtrace, which names no source):"; \
+	  awk '/^; file: /{src=$$0} \
+	       /^Backtrace for:/{bt=1} \
+	       bt && !fasl && match($$0,/[^ "]+\.fasl/){fasl=substr($$0,RSTART,RLENGTH)} \
+	       END{ if (fasl != "") printf "        %s (the fasl that failed; its source is this path with .lisp)\n", fasl; \
+	            else if (src != "") { sub(/^; file: /,"",src); printf "        %s\n", src } }' \
+	    $(OUTPUT_DIR)lint-LATEST.txt; \
 	  echo ""; \
 	  tail -20 $(OUTPUT_DIR)lint-LATEST.txt; \
 	  exit $$RC; \
