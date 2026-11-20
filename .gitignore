@@ -1,2 +1,3 @@
 .meta-env
 .gate-cache/
+test-fixtures/*/build-info.sexp

@@ -311,7 +311,7 @@ force-forms = $(LOAD_FORCE_EXTRA) --eval '(ql:quickload :$(1))' \
 .PHONY: help load force-load fast-load fast-force-load load-summary test test-summary clean \
         check-quicklisp check-sbcl \
         build install demo build-info \
-        test-eval test-trust lint test-receipts \
+        test-eval test-trust load-trust lint test-receipts \
         test-uncached test-eval-uncached cache-status cache-clean gate-selftest \
         fresh-build summarize build-report
 
@@ -342,7 +342,9 @@ help:
 	@echo "  make load           - Load system (for REPL exploration)"
 	@echo "  make fast-load       - Same, but Quicklisp-only (~1-2s startup)"
 	@echo "  make force-load     - Force-reload system (clears stale fasls)"
+	@echo "  make fast-force-load  - Same, but Quicklisp-only (~1-2s startup)"
 	@echo "  make load-summary   - Show warnings/errors from last load"
+	@echo "  make load-trust     - Self-check that the load verdict can be trusted"
 	@echo "  make demo-<name>    - Load system and run dev/<name>.lisp"
 	@echo "  make test           - Run tests, capture output to $(TEST_OUTPUT)"
 	@echo "  make test-summary   - Show test results from last run"
@@ -376,16 +378,40 @@ help:
 # ── Load ──────────────────────────────────────────────────────────────────
 # Captures stderr+stdout so errors are always inspectable via
 # make load-summary or direct inspection of $(LOAD_OUTPUT).
+#
+# EVERY load target ends in the same verdict, load-verdict.sh, exactly as the
+# test targets end in test-verdict.sh (bd-t5m).  Four copies of one blind grep
+# lived here before; each one passed its OWN log path, and force-load's was the
+# load target's file, which force-load never writes — so that gate could not
+# fail at all.  One implementation, one predicate, one line to read.
+#
+# The predicate is NOT "the log mentions a warning": see the header of
+# load-verdict.sh for what it gates on and why.  In short — an ERROR, a
+# non-zero exit, a missing/empty log, and an undefined variable or function in
+# a file under $(LOAD_SOURCES).  A benign compile WARNING (a duplicate
+# definition, a dependency macro's own warning) is printed and counted, never
+# gated: the documented way to tolerate one is LOAD_FORCE_EXTRA, and gating on
+# it made that escape hatch useless.
+LOAD_VERDICT_SH := $(_CL_MK_DIR)load-verdict.sh
+# Which files count as "this project's own sources" for the undefined-symbol
+# check.  Default: the whole project tree, which is the set of files this
+# Makefile's own fasls are built from.  A project that vendors a library inside
+# its tree (or generates code it does not own) narrows this to its source dirs:
+#
+#   LOAD_SOURCES := $(PROJECT_DIR)/src $(PROJECT_DIR)/test
+LOAD_SOURCES ?= $(PROJECT_DIR)
+LOAD_VERDICT_ARGS = $(foreach d,$(LOAD_SOURCES),--source '$(d)')
+# LOAD_FORCE_EXTRA is advertised as the way to tolerate a compile warning that is
+# not yours (see the force-forms comment above), so it belongs in the PLAIN load
+# targets too — otherwise "tolerated" means "tolerated by force-load only", and
+# the project's own `make load` stays red for a warning it has declared benign.
 load: check-quicklisp check-sbcl
 	$(call capture-output,load,$(SBCL_RUN) \
+	  $(LOAD_FORCE_EXTRA) \
 	  --eval '(ql:quickload :$(PROJECT_SYSTEM))' \
 	  --eval '(format t "~%$(PROJECT_SYSTEM) loaded.~%")') ; \
 	RC=$$?; \
-	if grep -qE "caught (fatal )?(ERROR|WARNING)" $(LOAD_OUTPUT); then \
-	  echo "ERROR: Load had errors — see $(LOAD_OUTPUT) for details"; \
-	  exit 1; \
-	fi; \
-	exit $$RC
+	bash $(LOAD_VERDICT_SH) --target load $(LOAD_VERDICT_ARGS) '$(LOAD_OUTPUT)' $$RC
 
 build-info:
 	@printf '%s\n' '$(BUILD_INFO_FORM)' > $(BUILD_INFO_FILE)
@@ -396,11 +422,8 @@ force-load: check-quicklisp check-sbcl build-info
 	$(call capture-output,force-load,$(SBCL_RUN) \
 	  $(call force-forms,$(PROJECT_SYSTEM))) ; \
 	RC=$$?; \
-	if grep -qE "caught (fatal )?(ERROR|WARNING)" $(LOAD_OUTPUT); then \
-	  echo "ERROR: Force-load had errors — see $(LOAD_OUTPUT) for details"; \
-	  exit 1; \
-	fi; \
-	exit $$RC
+	bash $(LOAD_VERDICT_SH) --target force-load $(LOAD_VERDICT_ARGS) \
+	  '$(OUTPUT_DIR)force-load-LATEST.txt' $$RC
 
 # ── Fast load (Quicklisp-only, no ASDF source registry scan) ─────────────
 # Same as load/force-load but uses SBCL_QL — ~1-2s startup instead of ~15s.
@@ -408,25 +431,20 @@ force-load: check-quicklisp check-sbcl build-info
 # Quicklisp (via ~/quicklisp/local-projects/ or ql:register-local-projects).
 fast-load: check-quicklisp check-sbcl
 	$(call capture-output,fast-load,$(SBCL_QL) \
+	  $(LOAD_FORCE_EXTRA) \
 	  --eval '(ql:quickload :$(PROJECT_SYSTEM))' \
 	  --eval '(format t "~%$(PROJECT_SYSTEM) loaded.~%")') ; \
 	RC=$$?; \
-	if grep -qE "caught (fatal )?(ERROR|WARNING)" $(OUTPUT_DIR)fast-load-LATEST.txt; then \
-	  echo "ERROR: Load had errors — see $(OUTPUT_DIR)fast-load-LATEST.txt for details"; \
-	  exit 1; \
-	fi; \
-	exit $$RC
+	bash $(LOAD_VERDICT_SH) --target fast-load $(LOAD_VERDICT_ARGS) \
+	  '$(OUTPUT_DIR)fast-load-LATEST.txt' $$RC
 
 fast-force-load: check-quicklisp check-sbcl
 	@echo "Fast force-reloading $(PROJECT_SYSTEM)..."
 	$(call capture-output,fast-force-load,$(SBCL_QL) \
 	  $(call force-forms,$(PROJECT_SYSTEM))) ; \
 	RC=$$?; \
-	if grep -qE "caught (fatal )?(ERROR|WARNING)" $(OUTPUT_DIR)fast-force-load-LATEST.txt; then \
-	  echo "ERROR: Force-load had errors — see $(OUTPUT_DIR)fast-force-load-LATEST.txt for details"; \
-	  exit 1; \
-	fi; \
-	exit $$RC
+	bash $(LOAD_VERDICT_SH) --target fast-force-load $(LOAD_VERDICT_ARGS) \
+	  '$(OUTPUT_DIR)fast-force-load-LATEST.txt' $$RC
 
 load-summary:
 	@if [ -f $(LOAD_OUTPUT) ]; then \
@@ -436,6 +454,22 @@ load-summary:
 	else \
 	  echo "No load output at $(LOAD_OUTPUT). Run 'make load' first."; \
 	fi
+
+# `make load-trust` — is the load verdict still a verdict? (bd-t5m)
+# Runs the REAL load targets against fixture projects in test-fixtures/, the way
+# test-trust and lint-trust drive the real test and lint targets:
+#   load-style-warning     style-warnings only                          -> GREEN
+#   load-tolerated-warning a real 'caught WARNING' the project declared
+#                          benign with LOAD_FORCE_EXTRA                -> GREEN
+#   load-undefined         an undefined variable and an undefined
+#                          function in src/                           -> RED,
+#                          naming both files, on a ZERO command exit
+# ...then load-verdict.sh's own gates on synthetic logs taken verbatim from a
+# real SBCL log, so the predicate is checked independently of the fixtures.
+# Without the first two, a red on the third could be anything; without the third
+# the green could be a gate that never looks.
+load-trust: check-quicklisp check-sbcl
+	@bash $(_CL_MK_DIR)load-trust.sh "$(_CL_MK_DIR)" "$(SBCL)" "$(QL)"
 
 # ── Demo runner ───────────────────────────────────────────────────────────
 # Usage: make demo-<name>  →  loads system then runs dev/<name>.lisp

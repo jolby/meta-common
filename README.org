@@ -60,9 +60,12 @@ demo: check-quicklisp
 | Target             | Description                                           |
 |--------------------+-------------------------------------------------------|
 | =make help=        | Print all available targets and override options      |
-| =make load=        | Quickload the system, capture output, check for errors |
+| =make load=        | Quickload the system, capture output, compute the load verdict |
+| =make fast-load=   | Same, Quicklisp-only (~1-2s startup)                 |
 | =make force-load=  | Force-reload system (clears stale fasls)              |
+| =make fast-force-load= | Same, Quicklisp-only                              |
 | =make load-summary= | Show warnings/errors from the last =make load=       |
+| =make load-trust=  | Self-check that the load verdict can be trusted      |
 | =make test=        | Run tests, capture output, compute the PASS/FAIL verdict |
 | =make test-summary= | Show test results from the last =make test=          |
 | =make test-trust=  | Self-check that the test verdict can be trusted      |
@@ -234,6 +237,76 @@ The macro:
 Standard targets =load=, =force-load=, and =test= use =capture-output= internally.
 =load-summary= and =test-summary= read from =$(LOAD_OUTPUT)= and =$(TEST_OUTPUT)=,
 which are derived from =$(OUTPUT_DIR)=.
+
+** The Load Verdict — four targets, one predicate (bd-t5m)
+
+=make load=, =make fast-load=, =make force-load= and =make fast-force-load=
+all end in the same script, =load-verdict.sh=, the way the test targets end in
+=test-verdict.sh=.  Before this, four copies of one blind grep decided whether a
+load had failed:
+
+#+begin_src sh
+  grep -qE "caught (fatal )?(ERROR|WARNING)" <log>
+#+end_src
+
+That predicate was wrong in both directions, and both were measured before it
+was replaced:
+
+- *It could not fail, in =force-load=.*  The recipe grepped =$(LOAD_OUTPUT)=
+  (=/tmp/<system>-load-LATEST.txt=), which is the *load* target's log.  It wrote
+  =/tmp/<system>-force-load-LATEST.txt=, so the grep was reading a file that need
+  not exist; grep exits 2 on that, =if= reads failure, and the gate passed.  A
+  system whose docstring ended at an inner quote produced
+  =; undefined variable: ...= in force-load's own log and =make force-load=
+  still exited 0.
+- *It cried wolf.*  =caught WARNING= also matches warnings that are benign for a
+  load gate and are not the project's to fix — real logs on this machine contain
+  =; caught WARNING: Duplicate definition for G found in one file.= and LOOM's
+  =; caught WARNING: LOOM requires the 'if' form to have an 'else' clause.=  The
+  documented way to tolerate one is =LOAD_FORCE_EXTRA= (which downgrades ASDF's
+  compile-file failure behaviour), and the grep re-failed exactly the projects
+  that had used it.
+
+What it gates on now:
+
+- the load command exited non-zero;
+- the log was never created, or holds nothing but =capture-output='s header;
+- the compiler reported an ERROR, per-condition (=; caught ERROR:=) or counted
+  (=; caught 2 fatal ERROR conditions=);
+- an undefined *variable or function* in a file under =$(LOAD_SOURCES)=.
+
+Everything else is REPORTED, not gated: benign WARNINGs and STYLE-WARNINGs are
+counted and echoed into the log under =warnings tolerated (not a gate)=, so a
+reader sees them and a future detector can be added on purpose.  Style-warnings
+never gate on their own.
+
+An undefined *function* is gated because of how the log is produced, not by
+assumption: the force targets run a plain =ql:quickload= first, so by the time
+the forced compile happens every file in the system is loaded.  A name that is
+still undefined exists nowhere, and the call would signal =UNDEFINED-FUNCTION=
+the first time it ran.  A legal backward reference (file A calling a function
+file B defines later) produces no warning at all in this log — measured.
+
+=LOAD_SOURCES= (default =$(PROJECT_DIR)=) is the scope for that check.  Narrow it
+to the directories you own if the tree vendors or generates code:
+
+#+begin_src makefile
+  LOAD_SOURCES := $(PROJECT_DIR)/src $(PROJECT_DIR)/test
+#+end_src
+
+=make load-trust= is the regression test: it runs the real load targets against
+three fixture projects and then feeds =load-verdict.sh= synthetic logs taken
+verbatim from a real SBCL log.  A project with style-warnings only must PASS,
+a project with a real WARNING it declared benign must PASS, and a project with
+an undefined variable *and* an undefined function must FAIL and name both files
+— on a command exit of 0, so the red cannot be blamed on the exit status.
+
+*Limitation, measured:* =ql:quickload= compiles with Quicklisp's quiet mode, so
+=make load= and =make fast-load= logs contain no compile warnings at all when the
+system is stale — the verdict can only report what the log shows, which for those
+two targets is very little.  =make force-load= and =make fast-force-load= are the
+loud ones (ASDF's forced recompile runs outside quickload), and =make lint=
+covers the same undefined-symbol class over the directories it is told to scan.
 
 ** The Test Verdict — read the verdict line, not the counters
 
