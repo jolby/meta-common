@@ -39,6 +39,7 @@
 # USAGE
 #   gate-receipt run    GATE --log PATH [opts] -- CMD...
 #   gate-receipt digest GATE [opts] [--verbose]
+#   gate-receipt why    GATE [opts]
 #   gate-receipt status [--cache DIR] [--verbose]
 #   gate-receipt clean  [--cache DIR] [--all | GATE...]
 #   gate-receipt selftest
@@ -417,6 +418,99 @@ digest_gate() {
   exit 0
 }
 
+# ── why (diagnostic: did the newest receipt miss, and on WHICH input) ─────
+#
+# The question a stale receipt costs a re-run to answer, until now.  A gate's
+# digest walks the project AND every sibling repo (ASDF loads them through
+# `:tree`), so ANYONE's save invalidates EVERYONE's receipts — correctly, because
+# a false hit is the one failure this tool must never have.  But a bare `miss`
+# cannot tell you whether the change can possibly affect THIS gate, so the only
+# safe-looking move is to run it.  That is how a workstation ends up pegged for
+# twenty minutes (bd-eto).
+#
+# This mode compares the newest receipt's manifest against the tree as it is NOW
+# and names what moved.  It EXECUTES NOTHING and WRITES NOTHING, so it is the
+# thing to run first: `make cache-why` costs ~0.4 s per gate.
+#
+# THE CMD LINE IS READ FROM THE RECEIPT, not from this command line.  `cmd=` is
+# part of the manifest (it names the recipe a receipt was made from), and `why`
+# is given no command — so it echoes the receipt's, which is what makes the two
+# digests comparable.  A change to the make RECIPE still shows up, as a changed
+# `Makefile` input, which is what it is.
+manifest_diff() {
+  # One line per difference: "M path" changed, "A path" added since, "R path"
+  # removed since, "S key" a non-file manifest line that differs.
+  awk '
+    FNR==NR {
+      if ($1=="file") old[$3]=$2
+      else if ($1!="cmd") olds[$0]=1
+      next
+    }
+    $1=="file" { cur[$3]=$2; next }
+    $1!="cmd"  { curs[$0]=1 }
+    END {
+      for (p in cur) {
+        if (!(p in old))      print "A " p
+        else if (old[p]!=cur[p]) print "M " p
+      }
+      for (p in old) if (!(p in cur)) print "R " p
+      for (k in curs) if (!(k in olds)) print "S " k
+      for (k in olds) if (!(k in curs)) print "S " k
+    }
+  ' "$1" "$2" | LC_ALL=C sort -k2
+}
+
+why_gate() {
+  GATE=${1:-}
+  [ -n "$GATE" ] || die "why needs a gate name"
+  shift
+  parse_opts "$@" || die "bad option"
+  ROOT=$(cd "$ROOT" && pwd) || die "no such root: $ROOT"
+  [ ${#INPUTS[@]} -gt 0 ] || die "why needs at least one --input"
+  [ -n "$CACHE" ] || CACHE=$ROOT/.gate-cache
+
+  local latest dir rec logp diff nchanged nadded nremoved nstamp
+  latest=$(cat "$CACHE/$GATE/LATEST" 2>/dev/null)
+  dir=$CACHE/$GATE/$latest
+  if [ -z "$latest" ] || [ ! -f "$dir/manifest" ]; then
+    printf '%-22s %s\n' "$GATE" "no receipt — nothing to compare (run it once)"
+    return 0
+  fi
+  rec=$(cat "$dir/recorded" 2>/dev/null || echo '?')
+  logp=$(cat "$dir/log_path" 2>/dev/null || echo '(none)')
+
+  CMDSTR=$(cat "$dir/cmd" 2>/dev/null || echo '')
+  build_manifest
+
+  if [ "$DIGEST" = "$latest" ]; then
+    printf '%-22s %s  %s  log: %s\n' "$GATE" "cached" "$(short8 "$latest")" "$logp"
+    return 0
+  fi
+
+  diff=$(manifest_diff "$dir/manifest" "$MANIFEST" \
+         | sed -e 's|/\./|/|g' \
+               -e "s|$(dirname "$ROOT")/||g" -e "s|$ROOT/||g" \
+         | LC_ALL=C sort -u)
+  nchanged=$(printf '%s\n' "$diff" | grep -c '^M ')
+  nadded=$(printf '%s\n' "$diff" | grep -c '^A ')
+  nremoved=$(printf '%s\n' "$diff" | grep -c '^R ')
+  nstamp=$(printf '%s\n' "$diff" | grep -c '^S ')
+  printf '%-22s %s  %s  recorded %s  log: %s\n' \
+    "$GATE" "STALE" "$(short8 "$latest")" "$rec" "$logp"
+  printf '  %d changed, %d added, %d removed, %d stamp(s) since that receipt:\n' \
+    "$nchanged" "$nadded" "$nremoved" "$nstamp"
+  # Eight is enough to recognise the culprit (the usual answer is "another
+  # agent landed in a sibling repo") and short enough to read at a glance.
+  printf '%s\n' "$diff" | grep . | head -8 | while IFS= read -r line; do
+    printf '    %s\n' "$line"
+  done
+  n=$(printf '%s\n' "$diff" | grep -c .)
+  [ "$n" -gt 8 ] && printf '    ... and %d more\n' "$((n - 8))"
+  printf '  Nothing was executed and nothing was written. A miss is CORRECT when\n'
+  printf '  one of these can change this gate\x27s answer; run it only then.\n'
+  return 0
+}
+
 # ── status / clean ────────────────────────────────────────────────────────
 status_cache() {
   local cache=$1
@@ -563,6 +657,37 @@ EOS
   printf 'defload2\n' >"$PARENT/sib/sib.lisp"
   d2=$(digest_gate green "${opts[@]}" 2>/dev/null)
   check "4c a sibling repo change changes the digest"             "$(is "$([ "$d1" != "$d2" ] && echo 0 || echo 1)")"
+
+  # ── 4d-4i. `why`: WHICH input invalidated the receipt (bd-eto) ─────────
+  # The digest is wide ON PURPOSE (the project and every sibling repo, because
+  # ASDF loads them through :tree), so a miss is usually somebody else's
+  # landing.  The missing half was the next question — WHICH input moved, and
+  # can it change this gate's answer — and without it the only safe-looking move
+  # is to re-run, which is how a workstation ends up pegged.  These pin that
+  # `why` answers it, executes nothing, and writes nothing.
+  local before
+  out=$(why_gate green "${opts[@]}" 2>&1)
+  check "4d why reports STALE after a sibling change"             \
+        "$(is "$(printf '%s' "$out" | grep -q 'STALE' && echo 0 || echo 1)")"
+  check "4e why NAMES the input that moved"                       \
+        "$(is "$(printf '%s' "$out" | grep -q 'sib\.lisp' && echo 0 || echo 1)")"
+  : >"$COUNT"
+  why_gate green "${opts[@]}" >/dev/null 2>&1
+  check "4f why executes nothing"                                 \
+        "$(is "$([ ! -s "$COUNT" ] && echo 0 || echo 1)")"
+  before=$(cat "$CACHE/green/LATEST")
+  why_gate green "${opts[@]}" >/dev/null 2>&1
+  check "4g why writes no receipt (LATEST unchanged)"             \
+        "$(is "$([ "$(cat "$CACHE/green/LATEST")" = "$before" ] && echo 0 || echo 1)")"
+  # Make the receipt current again: the same question must then answer "cached",
+  # or `why` would be a pessimist nobody could use to skip a run.
+  try_gate green "${opts[@]}" -- "$FAKE" "$COUNT" "$LOG" 0 >/dev/null 2>&1
+  out=$(why_gate green "${opts[@]}" 2>&1)
+  check "4h why says cached when the digest matches"              \
+        "$(is "$(printf '%s' "$out" | grep -q 'cached' && echo 0 || echo 1)")"
+  out=$(why_gate nosuchgate "${opts[@]}" 2>&1); rc=$?
+  check "4i why on a gate with no receipt says so, and exits 0"   \
+        "$(is "$(printf '%s' "$out" | grep -q 'no receipt' && [ "$rc" -eq 0 ] && echo 0 || echo 1)")"
 
   # ── 5. FORCE=1 forces a miss on an identical digest ───────────────────
   : >"$COUNT"
@@ -738,6 +863,7 @@ case "$sub" in
   help|--help|-h) usage ;;
   run)      run_gate "$@" ;;
   digest)   digest_gate "$@" ;;
+  why)      why_gate "$@" ;;
   selftest) selftest ;;
   status)
     CACHE_ARG=$PWD/.gate-cache

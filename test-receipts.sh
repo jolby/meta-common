@@ -22,6 +22,9 @@
 #      --stamp-env (a value read from the environment) each change the digest
 #      when they change, and an UNSET --stamp-env is a stable empty value
 #      rather than "nothing recorded" (bd-8dn)
+#   9  `make cache-why` explains a miss WITHOUT running the gate: it says
+#      "cached" on a matching tree, names the input that moved on a changed one,
+#      and starts no SBCL process either way (bd-eto)
 #
 # The numbers below are the section numbers the run prints.
 #
@@ -90,7 +93,7 @@ echo "== test-receipts: fixtures under $FIXTURES =="
 echo "   receipts: $CACHE"
 
 # ── 1/2. the same green run twice ─────────────────────────────────────────
-echo "[1/8] a green gate, twice — the second must be a hit"
+echo "[1/9] a green gate, twice — the second must be a hit"
 LOG=$(log_for "$GREEN" test)
 : >"$COUNTER"
 run_make "$GREEN" test
@@ -105,14 +108,14 @@ check "the second run restores the log byte-for-byte"       "$(is "$(cmp -s "$LO
 check "the restored log still carries the verdict line"     "$(is "$(grep -q '^=== VERDICT: PASS' "$LOG" && echo 0 || echo 1)")"
 
 # ── 3. FORCE=1 ───────────────────────────────────────────────────────────
-echo "[2/8] FORCE=1 must re-run a receipted gate"
+echo "[2/9] FORCE=1 must re-run a receipted gate"
 : >"$COUNTER"
 FORCE=1 run_make "$GREEN" test
 check "FORCE=1 exits 0"                                     "$(is "$RC")"
 check "FORCE=1 executed SBCL"                               "$(is "$([ "$(runs)" -eq 1 ] && echo 0 || echo 1)")"
 
 # ── 4. test-package is keyed by PKG ──────────────────────────────────────
-echo "[3/8] test-package: the variant (PKG) is part of the key"
+echo "[3/9] test-package: the variant (PKG) is part of the key"
 : >"$COUNTER"
 run_make "$GREEN" test-package "PKG=$GREEN_PKG"
 check "test-package runs"                                   "$(is "$RC")"
@@ -124,7 +127,7 @@ check "the dotted designator is a different gate (it MISSES)" \
       "$(is "$([ "$(runs)" -eq 2 ] && echo 0 || echo 1)")"
 
 # ── 5. test-eval is keyed by EVAL ────────────────────────────────────────
-echo "[4/8] test-eval: the form (EVAL) is part of the key"
+echo "[4/9] test-eval: the form (EVAL) is part of the key"
 : >"$COUNTER"
 run_make "$GREEN" test-eval 'EVAL=(format t "~&one.~%")'
 check "test-eval runs"                                      "$(is "$RC")"
@@ -135,7 +138,7 @@ run_make "$GREEN" test-eval 'EVAL=(format t "~&two.~%")'
 check "a different form MISSES"                             "$(is "$([ "$(runs)" -eq 2 ] && echo 0 || echo 1)")"
 
 # ── 6. a red gate is never receipted ─────────────────────────────────────
-echo "[5/8] a red gate must run every time"
+echo "[5/9] a red gate must run every time"
 : >"$COUNTER"
 BEFORE=$(find "$CACHE" -mindepth 2 -maxdepth 2 -type d 2>/dev/null | sort)
 run_make "$RED" test
@@ -147,7 +150,7 @@ AFTER=$(find "$CACHE" -mindepth 2 -maxdepth 2 -type d 2>/dev/null | sort)
 check "no receipt was stored for it"                        "$(is "$([ "$BEFORE" = "$AFTER" ] && echo 0 || echo 1)")"
 
 # ── 7. cache-clean ───────────────────────────────────────────────────────
-echo "[6/8] cache-clean must empty the store"
+echo "[6/9] cache-clean must empty the store"
 : >"$COUNTER"
 run_make "$GREEN" cache-clean
 check "cache-clean exits 0"                                 "$(is "$RC")"
@@ -156,7 +159,7 @@ run_make "$GREEN" test
 check "the run after a clean executes SBCL again"           "$(is "$([ "$(runs)" -eq 1 ] && echo 0 || echo 1)")"
 
 # ── 8. a changed input invalidates ───────────────────────────────────────
-echo "[7/8] a changed input must force a miss"
+echo "[7/9] a changed input must force a miss"
 SRC=$GREEN/tests.lisp
 cp -f "$SRC" "$SCRATCH/tests.lisp.orig"
 run_make "$GREEN" test
@@ -170,12 +173,12 @@ run_make "$GREEN" cache-clean
 # ── 8. the stamping mechanism (bd-8dn) ───────────────────────────────────
 # The verdict-pass fixture carries two digest inputs of its own (see its
 # Makefile): GATE_STAMPS_test += literal=$(LITERAL) and GATE_STAMP_ENVS +=
-# FROM_ENV.  Nothing above can see them.  [3/8] and [4/8] touch --stamp-env only
+# FROM_ENV.  Nothing above can see them.  [3/9] and [4/9] touch --stamp-env only
 # through values those gates ALREADY vary (PKG, EVAL), so they would pass with
 # the mechanism half-broken, and --stamp had no test at all — which is how
 # bd-gsj's un-stamped fixture selector shipped.  Each assertion below is one run
 # separated from the run before it by exactly ONE stamp.
-echo "[8/8] the stamping mechanism: a literal --stamp and an environment --stamp-env"
+echo "[8/9] the stamping mechanism: a literal --stamp and an environment --stamp-env"
 : >"$COUNTER"
 run_make "$GREEN" cache-clean
 LITERAL=one run_make "$GREEN" test
@@ -195,6 +198,38 @@ check "a --stamp-env value MISSES"                          "$(is "$([ "$(runs)"
 run_make "$GREEN" test LITERAL=two
 check "an UNSET --stamp-env hits the run from before it was set" \
       "$(is "$([ "$(runs)" -eq 3 ] && echo 0 || echo 1)")"
+run_make "$GREEN" cache-clean
+
+# ── 9. cache-why: the DRY explanation (bd-eto) ───────────────────────────
+# A gate's digest walks the project AND every sibling repo (ASDF loads them
+# through :tree), so a landing anywhere invalidates every gate everywhere — and
+# that is correct, because a false hit is the one failure the tool must never
+# have.  What was missing is the follow-up question: WHICH input moved, and can
+# it change this gate's answer.  Without it the only safe-looking move is to
+# re-run, which is how a workstation ends up pegged for twenty minutes.  These
+# assertions pin the answer AND that asking costs no SBCL process.
+echo "[9/9] cache-why names the invalidating input and starts NO SBCL"
+: >"$COUNTER"
+run_make "$GREEN" cache-clean
+run_make "$GREEN" test
+check "a fresh receipt exists for the current tree"         "$(is "$([ "$(runs)" -eq 1 ] && echo 0 || echo 1)")"
+: >"$COUNTER"
+run_make "$GREEN" cache-why GATE=test
+check "cache-why on a matching tree says cached"            \
+      "$(is "$(printf '%s' "$OUT" | grep -q 'cached' && echo 0 || echo 1)")"
+check "cache-why started no SBCL process"                   "$(is "$([ "$(runs)" -eq 0 ] && echo 0 || echo 1)")"
+SRC=$GREEN/tests.lisp
+printf '\n;; invalidated by the cache-why section\n' >>"$SRC"
+run_make "$GREEN" cache-why GATE=test
+check "cache-why on a changed tree says STALE"              \
+      "$(is "$(printf '%s' "$OUT" | grep -q 'STALE' && echo 0 || echo 1)")"
+check "cache-why NAMES the file that moved"                 \
+      "$(is "$(printf '%s' "$OUT" | grep -q 'tests.lisp' && echo 0 || echo 1)")"
+check "cache-why still started no SBCL process"             "$(is "$([ "$(runs)" -eq 0 ] && echo 0 || echo 1)")"
+run_make "$GREEN" cache-why
+check "bare cache-why reports every gate that has a receipt" \
+      "$(is "$(printf '%s' "$OUT" | grep -q '^test ' && echo 0 || echo 1)")"
+cp -f "$SCRATCH/tests.lisp.orig" "$SRC"
 run_make "$GREEN" cache-clean
 
 echo ""

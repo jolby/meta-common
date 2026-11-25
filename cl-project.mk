@@ -220,6 +220,7 @@ endif
 # generated tree declares it in GATE_EXCLUDES instead of narrowing the inputs.
 #
 #   make cache-status        what is cached, and where each log lives
+#   make cache-why           WHICH inputs invalidated each receipt (no execution)
 #   make cache-clean         drop every receipt (GATE=<name> for one)
 #   make FORCE=1 <gate>      re-run even on a matching receipt
 #   make gate-selftest       prove the tool still honours its invariants
@@ -281,7 +282,21 @@ GATE_REQUIRE_LOG_ARG = $(if $(strip $(GATE_REQUIRE_LOG_$(1))),--require-log-matc
 # Stamp values are QUOTED one by one (GATE_STAMPS_<gate> = flutter=$(shell ...)
 # produces a value with spaces, and an unquoted one would sheer into several
 # argv words).
-gate-receipt-prefix = $(GATE_RECEIPT) run $(1) --root '$(PROJECT_DIR)' --cache '$(GATE_CACHE_DIR)' --cache-version $(GATE_RECEIPT_VERSION) --log '$(2)' $(call GATE_REQUIRE_LOG_ARG,$(1)) $(addprefix --input ,$(GATE_INPUTS_ALWAYS) $(or $(GATE_INPUTS_$(1)),$(GATE_INPUTS_DEFAULT))) $(addprefix --exclude ,$(GATE_EXCLUDES) $(or $(GATE_EXCLUDES_$(1)),)) $(foreach st,$(GATE_STAMPS_ALWAYS) $(or $(GATE_STAMPS_$(1)),),--stamp '$(st)') $(addprefix --stamp-env ,$(GATE_STAMP_ENVS)) --sbcl '$(SBCL)' $(GATE_RECEIPT_SIBLINGS_ARG) --
+#
+# THE OPTION LIST IS ONE DEFINITION (bd-eto).  `run` and `why` must be keyed on
+# byte-identical options or `why` would explain a miss that `run` would serve,
+# which is worse than no explanation at all.  --log is only passed when there is
+# one, because `why` never restores a log and an empty --log is an error.
+gate-receipt-args = --root '$(PROJECT_DIR)' --cache '$(GATE_CACHE_DIR)' --cache-version $(GATE_RECEIPT_VERSION) $(if $(strip $(2)),--log '$(2)',) $(call GATE_REQUIRE_LOG_ARG,$(1)) $(addprefix --input ,$(GATE_INPUTS_ALWAYS) $(or $(GATE_INPUTS_$(1)),$(GATE_INPUTS_DEFAULT))) $(addprefix --exclude ,$(GATE_EXCLUDES) $(or $(GATE_EXCLUDES_$(1)),)) $(foreach st,$(GATE_STAMPS_ALWAYS) $(or $(GATE_STAMPS_$(1)),),--stamp '$(st)') $(addprefix --stamp-env ,$(GATE_STAMP_ENVS)) --sbcl '$(SBCL)' $(GATE_RECEIPT_SIBLINGS_ARG)
+
+gate-receipt-prefix = $(GATE_RECEIPT) run $(1) $(call gate-receipt-args,$(1),$(2)) --
+
+# `make cache-why` — the dry-run sibling of the wrapper above.  It prints, per
+# gate, either "cached" or "STALE" plus the inputs that moved since the receipt,
+# and executes and writes NOTHING (~0.4 s per gate).  Run it BEFORE deciding to
+# re-run a sweep: a gate's digest walks every sibling repo, so a miss is usually
+# somebody else's landing and says nothing about whether this run would differ.
+gate-receipt-why = $(GATE_RECEIPT) why $(1) $(call gate-receipt-args,$(1),)
 
 # ── Output capture macro ──────────────────────────────────────────────────
 # Capture stdout+stderr of a command to a timestamped output file.
@@ -348,7 +363,7 @@ force-forms = $(LOAD_FORCE_EXTRA) --eval '(ql:quickload :$(1))' \
         check-quicklisp check-sbcl \
         build install demo build-info \
         test-eval test-trust load-trust lint test-receipts \
-        test-uncached test-eval-uncached cache-status cache-clean gate-selftest \
+        test-uncached test-eval-uncached cache-status cache-why cache-clean gate-selftest \
         fresh-build summarize build-report
 
 # Conditional phony targets
@@ -388,6 +403,7 @@ help:
 	@echo "  make test-eval EVAL=\"(form)\"  - Run arbitrary test form"
 	@echo "  make lint           - Fail on undefined-symbol warnings from src/ (not part of test)"
 	@echo "  make cache-status   - What gate receipts are cached (VERBOSE=1 for detail)"
+	@echo "  make cache-why      - Which inputs invalidated each receipt (runs nothing; GATE=<name> for one)"
 	@echo "  make cache-clean    - Drop every gate receipt (GATE=<name> for one)"
 	@echo "  make gate-selftest  - Prove the receipt tool still honours its invariants"	@echo ""
 	@echo "Gates are receipted: a second run with unchanged inputs restores the log"
@@ -660,6 +676,27 @@ gate-selftest:
 
 cache-status:
 	@$(GATE_RECEIPT) status --cache '$(GATE_CACHE_DIR)' $(if $(VERBOSE),--verbose,)
+
+# WHICH INPUTS INVALIDATED A RECEIPT, without running anything (bd-eto).
+#
+# A gate's digest walks the project AND every sibling repo, because ASDF loads
+# them through (:tree PARENT_DIR) — so a landing in ANY repo invalidates EVERY
+# gate everywhere, and that is correct (a false hit is the failure this tool
+# exists to prevent).  What was missing is the next question: WHICH input moved,
+# and can it change this gate's answer?  Without it the only safe-looking move is
+# to run the gate, and a session that runs "just to be sure" pegs the machine.
+#
+#   make cache-why                 # every gate that has a receipt
+#   make cache-why GATE=test       # one
+#
+# It prints "cached" or "STALE" and up to eight changed paths, and it cannot be
+# wrong in the expensive direction: a STALE answer never claims a gate is fine.
+# The ANSWER to genuinely-stale gates is still to run them; this only stops the
+# runs that would have said what the last receipt already says.
+GATE_CACHE_GATES ?= $(notdir $(wildcard $(GATE_CACHE_DIR)/*))
+
+cache-why:
+	@$(if $(strip $(GATE)),$(call gate-receipt-why,$(GATE)),$(foreach g,$(GATE_CACHE_GATES),$(call gate-receipt-why,$(g));))
 
 cache-clean:
 	@$(GATE_RECEIPT) clean --cache '$(GATE_CACHE_DIR)' $(or $(GATE),--all)
