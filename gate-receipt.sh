@@ -19,6 +19,15 @@
 #   4. The receipt records the TARGET's exit code, not an inner command's.
 #      This is by construction: `run` wraps the whole `*-uncached` target.
 #   5. The cache is machine-local derived state, never committed.
+#   6. A green gate must SAY it judged something.  A gate declares the text its
+#      log carries only when a run that actually concluded (--require-log-match);
+#      when it does, exit 0 with no such line is NOT receipted and NOT green.
+#      Exit status is not evidence — the log is.  bd-829: a compile error in
+#      `make test` echoed the shared target's own no-test-system guard into the
+#      SBCL backtrace, the recipe took its "nothing to judge" exit-0 branch, and
+#      a build that compiled nothing was receipted GREEN; the next identical run
+#      answered "cached … PASS" without executing anything.  Invariant 2 could
+#      not see it because the gate really did exit 0.
 #
 # THE SHAPE IN cl-project.mk
 #   test:            @$(GATE_RECEIPT) run test --log <out> -- $(MAKE) --no-print-directory test-uncached
@@ -44,6 +53,8 @@
 #         --stamp-env NAME      digest input read from the environment
 #         --sbcl PATH           stamp PATH and its --version
 #         --cache-version N     bump to invalidate every receipt
+#         --require-log-match ERE  a green run must leave this in its log, or it
+#                               is not receipted and the gate fails (invariant 6)
 #         --verbose             digest: print the manifest
 #
 #   env: FORCE=1  behave as a miss even on an identical digest.
@@ -125,6 +136,7 @@ INPUTS=()
 EXCLUDES=()
 STAMPS=()
 STAMP_ENVS=()
+REQUIRE_LOG_MATCH=
 MISSING=()
 MANIFEST=
 DIGEST=
@@ -142,6 +154,7 @@ parse_opts() {
       --exclude)       EXCLUDES+=("${2:-}"); shift 2 ;;
       --stamp)         STAMPS+=("${2:-}"); shift 2 ;;
       --stamp-env)     STAMP_ENVS+=("${2:-}"); shift 2 ;;
+      --require-log-match) REQUIRE_LOG_MATCH=${2:-}; [ -n "$REQUIRE_LOG_MATCH" ] || die "--require-log-match needs a value"; shift 2 ;;
       --siblings)      SIBLINGS=${2:-}; [ -n "$SIBLINGS" ] || die "--siblings needs a value"; shift 2 ;;
       --no-siblings)   WALK_SIBLINGS=0; shift ;;
       --sbcl)          SBCL_BIN=${2:-}; [ -n "$SBCL_BIN" ] || die "--sbcl needs a value"; shift 2 ;;
@@ -234,6 +247,10 @@ build_manifest() {
   {
     printf 'cache_version=%s\n' "$CACHE_VERSION"
     printf 'gate=%s\n' "$GATE"
+    # The conclusion a green run must leave behind is part of the gate's
+    # DEFINITION: a receipt restored under a looser requirement says less than
+    # the gate now claims, which is the same false green by another road.
+    printf 'require_log_match=%s\n' "$REQUIRE_LOG_MATCH"
     printf 'cmd=%s\n' "$CMDSTR"
     tr '\0' '\n' <"$hashes" | awk '{ print "file " substr($1,1,64) " " substr($0,67) }'
     for m in "${MISSING[@]+"${MISSING[@]}"}"; do printf 'missing %s\n' "$m"; done
@@ -272,7 +289,7 @@ run_gate() {
     if [ "$seen_dd" -eq 1 ]; then cmd+=("$1"); shift; continue; fi
     case "$1" in
       --) seen_dd=1; shift ;;
-      --root|--cache|--log|--input|--exclude|--stamp|--stamp-env|--siblings|--sbcl|--cache-version)
+      --root|--cache|--log|--input|--exclude|--stamp|--stamp-env|--siblings|--sbcl|--cache-version|--require-log-match)
         [ $# -ge 2 ] || die "$1 needs a value"
         parse_opts "$1" "$2" || die "bad option $1"
         shift 2 ;;
@@ -338,6 +355,27 @@ run_gate() {
   if [ "$rc" -ne 0 ]; then
     # Invariant 2: nothing is written for a red gate.
     exit "$rc"
+  fi
+
+  # Invariant 6.  Exit 0 only means the recipe said so; a gate whose log holds
+  # none of the text a concluded run writes judged NOTHING.  The instance this
+  # was found on (bd-829) exited 0 because a diagnostic STRING appeared in an
+  # SBCL backtrace, so the check cannot be "the log mentions X": it is the text
+  # the gate's own verdict writes, and callers anchor it with ^ so a backtrace's
+  # echo of source text (mid-line, indented) cannot satisfy it.
+  if [ -n "$REQUIRE_LOG_MATCH" ]; then
+    if [ ! -f "$LOG" ]; then
+      say "$GATE: green but there is no log at $LOG — nothing says it judged"
+      say "$GATE: NOT receipted; treat this run as FAILED"
+      exit 1
+    fi
+    if ! grep -qE -- "$REQUIRE_LOG_MATCH" "$LOG"; then
+      say "$GATE: green, but the log holds no line matching '$REQUIRE_LOG_MATCH'"
+      say "$GATE: the gate judged NOTHING (a build that never reached its verdict
+      looks exactly like this) — NOT receipted; treat this run as FAILED."
+      say "$GATE: the log to read is $LOG"
+      exit 1
+    fi
   fi
 
   mkdir -p "$CACHE/$GATE" 2>/dev/null || { say "$GATE: cache not writable — not recorded"; exit 0; }
@@ -601,6 +639,88 @@ EOS
   rc=$?
   check "11 an unwritable cache still runs the gate and exits 0"  \
         "$(is "$([ "$(wc -l <"$COUNT")" -eq 1 ] && [ "$rc" -eq 0 ] && echo 0 || echo 1)")"
+
+  # ── 12. a green exit with NO conclusion line is not a pass (bd-829) ─────
+  # Measured instance: a test file failed to READ, SBCL aborted before
+  # test-verdict.sh ran, the captured log ended in a backtrace, the recipe still
+  # exited 0, and this tool recorded the build as GREEN.  The backtrace ECHOES
+  # the guard's own --eval source, so the log really does contain the phrase
+  # "test: NO TEST SYSTEM" — mid-line, inside frame 36.  That is why the pattern
+  # is anchored, and that is what this check pins.
+  local BROKEN=$SCRATCH/broken.sh
+  cat >"$BROKEN" <<'EOS'
+#!/usr/bin/env bash
+# $1 = counter file, $2 = log.  Exits 0 having judged nothing.
+echo run >>"$1"
+{ printf 'caught 2 fatal ERROR conditions\n'
+  printf '36: (SB-IMPL::PROCESS-EVAL/LOAD-OPTIONS ((:EVAL . #<(SIMPLE-ARRAY CHARACTER (292)) (unless (asdf:find-system "broken/tests" nil) (format t "~&test: NO TEST SYSTEM in this repo\n'
+  printf 'unhandled condition in --disable-debugger mode, quitting\n'
+} >"$2"
+exit 0
+EOS
+  chmod +x "$BROKEN"
+  local REQ='^(=== VERDICT: PASS|test: NO TEST SYSTEM( |$))'
+  : >"$COUNT"; rm -rf "$CACHE/req"
+  out=$(try_gate req "${opts[@]}" --require-log-match "$REQ" \
+          -- "$BROKEN" "$COUNT" "$LOG" 2>&1); rc=$?
+  check "12a a green exit whose log holds no conclusion line FAILS" \
+        "$(is "$([ "$rc" -ne 0 ] && echo 0 || echo 1)")"
+  check "12b ...and is not receipted"                         \
+        "$(is "$([ ! -d "$CACHE/req" ] && echo 0 || echo 1)")"
+  check "12c ...and it names the log to read"                  \
+        "$(is "$(printf '%s' "$out" | grep -q "log to read is $LOG" && echo 0 || echo 1)")"
+  check "12d a backtrace ECHO of the marker text does not satisfy it" \
+        "$(is "$([ -z "$(grep -E "$REQ" "$LOG")" ] && echo 0 || echo 1)")"
+
+  # The other half: the same shape is receipted when the declared line IS there.
+  # Without this, a requirement that can never be satisfied would pass 12a-c.
+  local CONCLUDED=$SCRATCH/concluded.sh
+  cat >"$CONCLUDED" <<'EOS'
+#!/usr/bin/env bash
+# $1 = counter file, $2 = log.  Exits 0 having written a verdict line.
+echo run >>"$1"
+{ printf 'caught 0 fatal ERROR conditions\n'
+  printf '=== VERDICT: PASS (target: req, log: %s) ===\n' "$2"
+} >"$2"
+exit 0
+EOS
+  chmod +x "$CONCLUDED"
+  : >"$COUNT"; rm -rf "$CACHE/req"
+  try_gate req "${opts[@]}" --require-log-match "$REQ" \
+    -- "$CONCLUDED" "$COUNT" "$LOG" >/dev/null 2>&1; rc=$?
+  check "12e a conclusion line at column 0 IS receipted"        \
+        "$(is "$([ "$rc" -eq 0 ] && [ -d "$CACHE/req" ] && echo 0 || echo 1)")"
+
+  # A verdict line that says FAIL must not be enough: a recipe that later exits 0
+  # by some path would otherwise be receipted from a log that says the gate
+  # failed.  Only the word PASS, at column 0, plus the no-test-system report.
+  local FAILVERDICT=$SCRATCH/failverdict.sh
+  cat >"$FAILVERDICT" <<'EOS'
+#!/usr/bin/env bash
+# $1 = counter file, $2 = log.  Exits 0 with a verdict line that says FAIL.
+echo run >>"$1"
+printf 'caught 1 ERROR condition\n=== VERDICT: FAIL (target: req, log: %s) ===\n' "$2" >"$2"
+exit 0
+EOS
+  chmod +x "$FAILVERDICT"
+  : >"$COUNT"; rm -rf "$CACHE/reqfail"
+  out=$(try_gate reqfail "${opts[@]}" --require-log-match "$REQ" \
+          -- "$FAILVERDICT" "$COUNT" "$LOG" 2>&1); rc=$?
+  check "12f a FAIL verdict with a 0 exit is not receipted either" \
+        "$(is "$([ "$rc" -ne 0 ] && [ ! -d "$CACHE/reqfail" ] && echo 0 || echo 1)")"
+
+  # A receipt made while the requirement was LACKING must not answer for a gate
+  # that now declares one: the requirement is part of the gate's definition, so
+  # it is part of the digest.
+  d1=$(digest_gate req "${opts[@]}" 2>/dev/null)
+  d2=$(digest_gate req "${opts[@]}" --require-log-match "$REQ" 2>/dev/null)
+  check "12g the requirement is part of the digest"             \
+        "$(is "$([ "$d1" != "$d2" ] && echo 0 || echo 1)")"
+  rm -f "$LOG"
+  out=$(try_gate req "${opts[@]}" --require-log-match "$REQ" \
+          -- "$CONCLUDED" "$COUNT" "$LOG" 2>&1); rc=$?
+  check "12h a hit restores the judged log with its verdict line" \
+        "$(is "$([ "$rc" -eq 0 ] && grep -q '^=== VERDICT: PASS' "$LOG" && echo 0 || echo 1)")"
 
   echo ""
   if [ "$SELF_FAILED" -eq 0 ]; then

@@ -240,12 +240,32 @@ GATE_RECEIPT_SIBLINGS_ARG = $(if $(strip $(GATE_RECEIPT_SIBLINGS)),--siblings '$
 GATE_STAMP_ENVS ?= PKG REPORT EVAL DYNAMIC_SPACE_SIZE
 export PKG REPORT EVAL DYNAMIC_SPACE_SIZE
 
+# What a JUDGED run of a gate leaves in its log, as an extended regex.  When a
+# gate declares one, gate-receipt.sh refuses to record a green receipt for a log
+# that holds no matching line, and fails the gate instead (invariant 6 in that
+# file).  This exists because exit status alone is not evidence: a compile error
+# makes SBCL exit before test-verdict.sh runs, so the log ends in a backtrace and
+# the run judged nothing while some recipe path still said 0 (bd-829).
+#
+# ANCHOR WITH ^ AND ASK FOR THE WORD PASS.  A backtrace echoes the source text
+# of every --eval it was given, so a substring match finds the shared target's own
+# diagnostic strings inside a crash; only column 0 is where a real conclusion is
+# printed.  And a receipt may only be made from a log that says the gate PASSED:
+# "a verdict line exists" would accept a FAIL line from a recipe that later
+# exited 0 by some path, which is the same false green one step further out.
+# The test gate admits BOTH of its honest endings: PASS, and the no-test-system
+# report (bd-wf7.1 deliberately writes no verdict there).
+GATE_REQUIRE_LOG_test ?= ^(=== VERDICT: PASS|$(NO_TEST_SYSTEM_MARKER)( |$$))
+GATE_REQUIRE_LOG_test-package ?= ^=== VERDICT: PASS
+GATE_REQUIRE_LOG_test-eval ?= ^=== VERDICT: PASS
+GATE_REQUIRE_LOG_ARG = $(if $(strip $(GATE_REQUIRE_LOG_$(1))),--require-log-match '$(GATE_REQUIRE_LOG_$(1))',)
+
 # The one-line wrapper a cached gate's recipe starts with.  One line on
 # purpose: a multi-line define would split the recipe and lose the command.
 # Stamp values are QUOTED one by one (GATE_STAMPS_<gate> = flutter=$(shell ...)
 # produces a value with spaces, and an unquoted one would sheer into several
 # argv words).
-gate-receipt-prefix = $(GATE_RECEIPT) run $(1) --root '$(PROJECT_DIR)' --cache '$(GATE_CACHE_DIR)' --cache-version $(GATE_RECEIPT_VERSION) --log '$(2)' $(addprefix --input ,$(GATE_INPUTS_ALWAYS) $(or $(GATE_INPUTS_$(1)),$(GATE_INPUTS_DEFAULT))) $(addprefix --exclude ,$(GATE_EXCLUDES) $(or $(GATE_EXCLUDES_$(1)),)) $(foreach st,$(GATE_STAMPS_ALWAYS) $(or $(GATE_STAMPS_$(1)),),--stamp '$(st)') $(addprefix --stamp-env ,$(GATE_STAMP_ENVS)) --sbcl '$(SBCL)' $(GATE_RECEIPT_SIBLINGS_ARG) --
+gate-receipt-prefix = $(GATE_RECEIPT) run $(1) --root '$(PROJECT_DIR)' --cache '$(GATE_CACHE_DIR)' --cache-version $(GATE_RECEIPT_VERSION) --log '$(2)' $(call GATE_REQUIRE_LOG_ARG,$(1)) $(addprefix --input ,$(GATE_INPUTS_ALWAYS) $(or $(GATE_INPUTS_$(1)),$(GATE_INPUTS_DEFAULT))) $(addprefix --exclude ,$(GATE_EXCLUDES) $(or $(GATE_EXCLUDES_$(1)),)) $(foreach st,$(GATE_STAMPS_ALWAYS) $(or $(GATE_STAMPS_$(1)),),--stamp '$(st)') $(addprefix --stamp-env ,$(GATE_STAMP_ENVS)) --sbcl '$(SBCL)' $(GATE_RECEIPT_SIBLINGS_ARG) --
 
 # ── Output capture macro ──────────────────────────────────────────────────
 # Capture stdout+stderr of a command to a timestamped output file.
@@ -583,9 +603,20 @@ PARACHUTE_EXIT_EVAL = (eval (quote (defparameter cl-user::*exit-on-test-failures
 # sentence points at it instead of leaving the reader to guess which gate matters
 # here. It is a plain target name: `TEST_ALTERNATIVE := codegen-test`.
 TEST_ALTERNATIVE ?=
+# The marker is ASSEMBLED BY THE LISP AT RUN TIME, never written whole into the
+# --eval source.  SBCL prints every --eval string in the
+# PROCESS-EVAL/LOAD-OPTIONS frame of a backtrace, so a literal marker appeared in
+# the log of ANY fatal error — and the "nothing to judge" branch below then took
+# a broken build's log for a vacuous run and exited 0.  Measured twice in one day
+# (bd-829); it also poisoned the gate receipt, so the NEXT identical run answered
+# "cached … PASS" for a build that compiled nothing.  The guard therefore formats
+# "NO TEST ~A" with the word supplied at run time, and the recipe matches the
+# assembled line ANCHORED at column 0, where the guard prints it and where a
+# backtrace frame (indented, mid-line) can never match.
 NO_TEST_SYSTEM_MARKER := test: NO TEST SYSTEM
+NO_TEST_SYSTEM_GREP = ^$(NO_TEST_SYSTEM_MARKER)( |$$)
 NO_TEST_SYSTEM_HINT = $(if $(strip $(TEST_ALTERNATIVE)),The suite here is `make $(TEST_ALTERNATIVE)`.,No TEST_ALTERNATIVE is declared, so this project names no other gate.)
-TEST_SYSTEM_GUARD = (unless (asdf:find-system "$(TEST_SYSTEM)" nil) (format t "~&$(NO_TEST_SYSTEM_MARKER) in this repo — $(TEST_SYSTEM) does not exist.~%      $(NO_TEST_SYSTEM_HINT)~%      no assertions were run, so there is nothing to summarize.~%") (sb-ext:exit :code 0))
+TEST_SYSTEM_GUARD = (unless (asdf:find-system "$(TEST_SYSTEM)" nil) (format t "~&test: NO TEST ~A in this repo — $(TEST_SYSTEM) does not exist.~%      $(NO_TEST_SYSTEM_HINT)~%      no assertions were run, so there is nothing to summarize.~%" "SYSTEM") (sb-ext:exit :code 0))
 test: check-quicklisp check-sbcl
 	@$(call gate-receipt-prefix,test,$(TEST_OUTPUT)) $(MAKE) --no-print-directory test-uncached
 
@@ -596,7 +627,7 @@ test-uncached: check-quicklisp check-sbcl
 	  $(call force-forms,$(TEST_SYSTEM)) \
 	  --eval '$(TEST_EVAL)') ; \
 	RC=$$?; \
-	if grep -qF '$(NO_TEST_SYSTEM_MARKER)' $(TEST_OUTPUT) 2>/dev/null; then \
+	if grep -qE '$(NO_TEST_SYSTEM_GREP)' $(TEST_OUTPUT) 2>/dev/null; then \
 	  exit 0; \
 	fi; \
 	TEST_SUMMARY_PATTERN='$(TEST_SUMMARY_PATTERN)' TEST_REQUIRE_SUMMARY=$(TEST_REQUIRE_SUMMARY) \
@@ -618,9 +649,9 @@ cache-clean:
 	@$(GATE_RECEIPT) clean --cache '$(GATE_CACHE_DIR)' $(or $(GATE),--all)
 
 test-summary:
-	@if grep -qF '$(NO_TEST_SYSTEM_MARKER)' $(TEST_OUTPUT) 2>/dev/null; then \
+	@if grep -qE '$(NO_TEST_SYSTEM_GREP)' $(TEST_OUTPUT) 2>/dev/null; then \
 	  echo "test-summary: this repo has no test system — there is no suite to report."; \
-	  grep -A3 -F "$(NO_TEST_SYSTEM_MARKER)" $(TEST_OUTPUT) | sed 's/^/  /'; \
+	  grep -A3 -E '$(NO_TEST_SYSTEM_GREP)' $(TEST_OUTPUT) | sed 's/^/  /'; \
 	elif [ -f $(TEST_OUTPUT) ]; then \
 	  if grep -qE "Suite:|Summary:|Passed:|Failed:|Skipped:|Plan:|VERDICT:" $(TEST_OUTPUT); then \
 	    grep -E "Suite:|Summary:|Passed:|Failed:|Skipped:|Plan:|VERDICT:" $(TEST_OUTPUT) | tail -20; \

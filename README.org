@@ -355,12 +355,57 @@ all.  That last gate is what stops =make test= from reporting success on a
 suite that never ran (a system whose =test-op= does nothing exits 0 and
 prints no summary).
 
-=make test-trust= is the regression test for all of this.  It runs four
+=make test-trust= is the regression test for all of this.  It runs five
 fixture systems in =test-fixtures/= through the real targets and asserts
 that a green suite PASSes, that a suite whose only failure is an unevaluated
 test FAILs (while its counters still say =Failed: 0=), that a suite
-that never ran FAILs too, and that a project with no suite says so instead of
-failing (37 checks, ~60 s).  Run it after changing any of this machinery.
+that never ran FAILs too, that a project with no suite says so instead of
+failing, and that a suite which does not even COMPILE is red, unjudged and
+never receipted (45 checks, ~95 s).  Run it after changing any of this machinery.
+
+*** "A green run must say it judged something" (bd-829)
+
+=make test-trust='s seventh case is the one that keeps this honest, and it came
+from two measured failures in one day.  A test file that did not READ made SBCL
+abort before =test-verdict.sh= ran: the log ended in a backtrace, `make test`
+exited 0, and a GREEN receipt was written for a build that compiled nothing — so
+the next identical run answered =cached … PASS=.  Two independent faults, both
+fixed, both pinned by a fixture:
+
+- *The no-test-system marker leaked through a backtrace.*  The guard's marker
+  (see above) was a literal inside the =--eval= source it hands SBCL, and SBCL
+  echoes every =--eval= string in its =PROCESS-EVAL/LOAD-OPTIONS= frame.  So ANY
+  fatal error put the marker in the log and the recipe took its "nothing to
+  judge, exit 0" branch.  The guard now ASSEMBLES the marker at run time
+  (=format t "~&test: NO TEST ~A …" "SYSTEM"), so the phrase exists nowhere in
+  the source, and the recipe matches the assembled line anchored at column 0
+  (=^…=), where the guard prints it and where a backtrace frame (indented,
+  mid-line) cannot.
+- *A receipt could be made from a log with no conclusion in it.*
+  =gate-receipt.sh= records only what the gate's log says, so a gate declares
+  the line a concluded run leaves behind, and a green exit without one is not
+  receipted — it FAILS.  This is the part that closes the class: the next
+  diagnostic string that leaks into a backtrace cannot become a green receipt.
+
+#+begin_src makefile
+# The defaults (only the test targets declare one; a gate may set it to empty)
+# $$ is make's escape for one literal $, so grep sees "( |$)".
+GATE_REQUIRE_LOG_test         ?= ^(=== VERDICT: PASS|$(NO_TEST_SYSTEM_MARKER)( |$$))
+GATE_REQUIRE_LOG_test-package ?= ^=== VERDICT: PASS
+GATE_REQUIRE_LOG_test-eval    ?= ^=== VERDICT: PASS
+# A project's own gate opts in with the line ITS verdict prints:
+GATE_REQUIRE_LOG_demos-dl-parity ?= ^demos-dl-parity: [0-9]+ demo(s), PASS
+#+end_src
+
+Two rules when writing one.  *Anchor it with =^=*: a backtrace echoes source
+mid-line, so an unanchored substring is satisfied by a crash.  *Ask for the word
+=PASS=*, not merely "a verdict line": a log that says =VERDICT: FAIL= beside a 0
+exit is exactly the false green one step further out.  The test gate admits its
+second honest ending, the no-test-system report, because bd-wf7.1 deliberately
+writes no verdict line there.
+
+The pattern is part of the DIGEST, so tightening it after the fact invalidates
+the receipts made under the looser one instead of answering from them.
 
 ** A project with no test system (bd-wf7)
 
@@ -382,6 +427,14 @@ test: NO TEST SYSTEM in this repo — my-project/tests does not exist.
       no assertions were run, so there is nothing to summarize.
 #+end_example
 
+The Lisp assembles that first line at run time (="NO TEST ~A"= with the word
+supplied as an argument), and the recipe matches it anchored at column 0.  That
+is not style: the marker used to be a literal inside the =--eval= source SBCL
+was handed, and SBCL echoes every =--eval= string in a backtrace frame, so ANY
+fatal error put the marker in the log and the recipe took its "nothing to judge,
+exit 0" branch — a broken build reported as green, twice in one day (bd-829).
+See the receipts section, "A green run must say it judged something".
+
 | Variable            | Default   | Meaning |
 |---------------------+-----------+---------|
 | =TEST_ALTERNATIVE=  | /empty/   | The target that DOES run this project's suite, named in that message.  A plain target name: =TEST_ALTERNATIVE := codegen-test= |
@@ -391,7 +444,7 @@ ASDF answers authoritatively on purpose.  Grepping the =.asd= files for a
 defined in another system's =.asd= (=mcclim-render-stack= defines its whole
 family in one file), it need not be spelled =/tests= (=render-parity= uses
 =/test=), and it can be found through the source registry rather than in the
-project directory.  =make test-trust='s seventh case pins all of it: a fixture
+project directory.  =make test-trust='s sixth case pins all of it: a fixture
 with no suite must exit 0, name the missing system, point at
 =TEST_ALTERNATIVE=, carry no verdict line, and not be described by
 =test-summary= as a log that does not exist.
@@ -487,6 +540,11 @@ The invariants, each of which is worse to break than to be slow:
    from the verdict, not from SBCL) is what is recorded.
 5. *The cache is machine-local derived state*, =$(PROJECT_DIR)/.gate-cache/=,
    gitignored, never committed.
+6. *A green gate must say it judged something.*  A gate that declares what its
+   conclusion line looks like (=GATE_REQUIRE_LOG_<gate>=, below) is not
+   receipted when its log holds no such line: it fails instead.  Exit status is
+   not evidence — the log is.  Added after a compile error in =make test= was
+   receipted green twice in one day (bd-829).
 
 Why the recipe is duplicated: each cached gate keeps its exact previous recipe
 under =<gate>-uncached= and gains a one-line wrapper.  On a miss the target
@@ -503,7 +561,7 @@ make cache-status            # what is cached, where each log lives
 make cache-status VERBOSE=1  # + receipt count and manifest path per gate
 make FORCE=1 test            # run despite a matching receipt
 make cache-clean             # drop every receipt (or GATE=test for one)
-make gate-selftest           # the tool's own 20 assertions, ~1s, no SBCL
+make gate-selftest           # the tool's own 35 assertions, ~2s, no SBCL
 make test-receipts           # end-to-end wiring check through the fixtures
 #+end_src
 

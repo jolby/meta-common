@@ -17,6 +17,12 @@
 #                      SYSTEM-NOT-FOUND and report FAIL      -> says NO TEST
 #                      SYSTEM, points at TEST_ALTERNATIVE,
 #                      exits 0, and writes NO verdict line
+#   verdict-broken-build a suite that does not COMPILE
+#                      (a test file that does not read)      -> FAIL, exit != 0,
+#                      no verdict line, no GREEN receipt, and the
+#                      no-test-system marker absent from the
+#                      backtrace that echoes the guard's own
+#                      source (bd-829)
 #   synthetic logs     one gate at a time (counted failure,
 #                      ✘, Failures block, no summary, bad
 #                      command exit, missing log)            -> each FAIL
@@ -84,7 +90,7 @@ verdict_is_last() {
 echo "== test-trust: fixtures under $FIXTURES =="
 
 # ── 1. A genuinely green suite: PASS, exit 0 ──────────────────────────────
-echo "[1/7] verdict-pass / make test — must PASS"
+echo "[1/8] verdict-pass / make test — must PASS"
 LOG=$(log_for "$FIXTURES/verdict-pass" test)
 run_make "$FIXTURES/verdict-pass" test
 check "verdict-pass: make test exits 0"                      "$(is "$RC")"
@@ -92,7 +98,7 @@ check "verdict-pass: log says PASS"                          "$(is "$(verdict_is
 check "verdict-pass: the verdict line is the log's last line" "$(is "$(verdict_is_last "$LOG"; echo $?)")"
 
 # ── 2. Only failure is a test that failed to evaluate: FAIL, exit != 0 ────
-echo "[2/7] verdict-eval-fail / make test — must FAIL"
+echo "[2/8] verdict-eval-fail / make test — must FAIL"
 LOG=$(log_for "$FIXTURES/verdict-eval-fail" test)
 run_make "$FIXTURES/verdict-eval-fail" test
 check "verdict-eval-fail: make test exits non-zero"          "$(is "$([ "$RC" -ne 0 ] && echo 0 || echo 1)")"
@@ -103,7 +109,7 @@ check "verdict-eval-fail: parachute's counters still lie (Failed: 0)"      "$(is
 check "verdict-eval-fail: the verdict names the real reason" "$(is "$(grep -q 'failed to evaluate properly' "$LOG" && grep -q '^=== VERDICT reasons ===' "$LOG"; echo $?)")"
 
 # ── 3. A suite that never ran: FAIL, exit != 0 ────────────────────────────
-echo "[3/7] verdict-no-suite / make test — must FAIL"
+echo "[3/8] verdict-no-suite / make test — must FAIL"
 LOG=$(log_for "$FIXTURES/verdict-no-suite" test)
 run_make "$FIXTURES/verdict-no-suite" test
 check "verdict-no-suite: make test exits non-zero"           "$(is "$([ "$RC" -ne 0 ] && echo 0 || echo 1)")"
@@ -112,7 +118,7 @@ check "verdict-no-suite: the verdict names the missing suite" "$(is "$(grep -q '
 check "verdict-no-suite: nothing in the log claims success"  "$(is "$(grep -qE '=== Exit: 0|VERDICT: PASS' "$LOG" && echo 1 || echo 0)")"
 
 # ── 4. test-package: same trap, direct parachute call ─────────────────────
-echo "[4/7] verdict-eval-fail / make test-package — must FAIL in the log"
+echo "[4/8] verdict-eval-fail / make test-package — must FAIL in the log"
 LOG=$(log_for "$FIXTURES/verdict-eval-fail" test-package)
 run_make "$FIXTURES/verdict-eval-fail" test-package PKG=":verdict-eval-fail/tests"
 check "test-package: exits non-zero"                         "$(is "$([ "$RC" -ne 0 ] && echo 0 || echo 1)")"
@@ -120,7 +126,7 @@ check "test-package: log says FAIL"                          "$(is "$(verdict_is
 check "test-package: the verdict line is the log's last line" "$(is "$(verdict_is_last "$LOG"; echo $?)")"
 
 # ── 5. test-eval: arbitrary form, no summary required ─────────────────────
-echo "[5/7] verdict-pass / make test-eval — must PASS without a summary"
+echo "[5/8] verdict-pass / make test-eval — must PASS without a summary"
 LOG=$(log_for "$FIXTURES/verdict-pass" test-eval)
 run_make "$FIXTURES/verdict-pass" test-eval 'EVAL=(format t "~&trivial form ran.~%")'
 check "test-eval: exits 0"                                   "$(is "$RC")"
@@ -139,7 +145,7 @@ check "test-eval: a dollar name in the form reaches Lisp intact" \
 # The trap (bd-wf7): `test` force-loads $(TEST_SYSTEM), the load signals
 # SYSTEM-NOT-FOUND, nothing runs, and the verdict says FAIL with "no test
 # summary in the log". A red gate no change to the code can turn green.
-echo "[6/7] no-test-system / make test — must say so and exit 0"
+echo "[6/8] no-test-system / make test — must say so and exit 0"
 LOG=$(log_for "$FIXTURES/no-test-system" test)
 run_make "$FIXTURES/no-test-system" test
 check "no-test-system: make test exits 0"                    "$(is "$RC")"
@@ -162,8 +168,58 @@ esac
 check "no-test-system: test-summary says the same, not 'run make test first'" \
       "$SUMMARY_SAYS_NO_SUITE"
 
-# ── 6. The verdict script's own gates, on synthetic logs ──────────────────
-echo "[7/7] test-verdict.sh — one gate at a time, no Lisp involved"
+# ── 7. A suite that does not COMPILE: red, unjudged, and never receipted ──
+# bd-829.  Measured TWICE in one day in stratodendron-gog: a test file failed to
+# read, SBCL aborted before test-verdict.sh ran, the captured log ended in a
+# backtrace, `make test` exited 0, and a GREEN gate receipt was written — so the
+# next identical run answered "cached … PASS" for a build that compiled nothing.
+#
+# Two independent faults made that possible, and this case pins both:
+#   * the no-test-system guard wrote its marker as a LITERAL into the --eval
+#     source, and SBCL echoes every --eval it was given in the
+#     PROCESS-EVAL/LOAD-OPTIONS backtrace frame.  So a compile error put the
+#     marker in the log and the recipe took its "nothing to judge, exit 0"
+#     branch.  The guard now assembles the marker at run time: the exact phrase
+#     must appear NOWHERE in this log, while the echoed source is still there
+#     (which is what makes the absence mean something rather than just "the
+#     guard did not run").
+#   * gate-receipt.sh recorded a green receipt for a log holding no conclusion.
+#     It now refuses one (its invariant 6), so a future leak of the same shape
+#     cannot poison the next run either.  The second, non-FORCE run below is
+#     what measures that.
+#
+# The log is anchored at column 0 on purpose: a backtrace frame is indented and
+# wraps the source text mid-line, so "the log mentions X" is never a test.
+echo "[7/8] verdict-broken-build / make test — must be RED and unjudged"
+LOG=$(log_for "$FIXTURES/verdict-broken-build" test)
+(cd "$FIXTURES/verdict-broken-build" && make cache-clean SBCL="$SBCL_BIN" QL="$QL_PATH") >/dev/null 2>&1
+run_make "$FIXTURES/verdict-broken-build" test
+check "broken-build: make test exits non-zero"                "$(is "$([ "$RC" -ne 0 ] && echo 0 || echo 1)")"
+check "broken-build: the log says FAIL"                       "$(is "$(verdict_is "$LOG" FAIL; echo $?)")"
+check "broken-build: the verdict names the real reason"        "$(is "$(grep -q 'no test summary' "$LOG"; echo $?)")"
+check "broken-build: the guard's marker is NOT in the log"     "$(is "$(grep -qF 'test: NO TEST SYSTEM' "$LOG" && echo 1 || echo 0)")"
+# ...and the reason that is a real check: the guard WAS handed to SBCL, and the
+# backtrace echoed its source.  A marker that moved rather than disappeared
+# would fail the check above and pass this one — as it should.
+check "broken-build: the echoed guard source is there (assembled)" \
+      "$(is "$(grep -qF 'NO TEST ~A' "$LOG"; echo $?)")"
+check "broken-build: no GREEN receipt was written"            "$(is "$([ ! -d "$FIXTURES/verdict-broken-build/.gate-cache/test" ] && echo 0 || echo 1)")"
+# The consequence, not the cause: run it again WITHOUT FORCE=1.  A poisoned
+# receipt is invisible in one run and answers every later one.
+(cd "$FIXTURES/verdict-broken-build" && make test SBCL="$SBCL_BIN" QL="$QL_PATH") \
+  >"/tmp/verdict-broken-build-test-second.txt" 2>&1
+RC_SECOND=$?
+check "broken-build: the NEXT run is red too (no poisoned receipt)" \
+      "$(is "$([ "$RC_SECOND" -ne 0 ] && echo 0 || echo 1)")"
+# Deliberately not `grep -q ... || echo 0`: a missing log would then read as a
+# pass.  The run must have produced output AND none of it may be a receipt hit.
+SECOND_OUT=/tmp/verdict-broken-build-test-second.txt
+if [ -s "$SECOND_OUT" ] && ! grep -qF 'cached (' "$SECOND_OUT"; then NO_HIT=0; else NO_HIT=1; fi
+check "broken-build: ...and it executed instead of answering 'cached'" \
+      "$(is "$NO_HIT")"
+
+# ── 8. The verdict script's own gates, on synthetic logs ──────────────────
+echo "[8/8] test-verdict.sh — one gate at a time, no Lisp involved"
 SYNTH=$(mktemp -d /tmp/test-trust-synth.XXXXXX)
 GREEN="=== x ===
 ;; Summary:
