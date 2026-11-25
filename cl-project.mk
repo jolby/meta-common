@@ -76,18 +76,34 @@ DYNAMIC_SPACE_SIZE ?= 4096
 CLEAN_EXTRA_PATTERNS ?= *.db *.db-journal
 BINARY_NAME ?=
 INSTALL_DIR ?= $(HOME)/.local/bin
-TEST_OUTPUT ?= /tmp/$(subst /,-,$(PROJECT_SYSTEM))-test-LATEST.txt
-LOAD_OUTPUT ?= /tmp/$(subst /,-,$(PROJECT_SYSTEM))-load-LATEST.txt
 
 # Base directory prefix for captured output files.
 # Per-target capture goes to $(OUTPUT_DIR)<target>-LATEST.txt
+# Keep the trailing character: these names are concatenated, not path-joined.
 OUTPUT_DIR ?= /tmp/$(subst /,-,$(PROJECT_SYSTEM))-
+
+# ── Every log that is WRITTEN and then JUDGED comes from OUTPUT_DIR ───────
+# bd-235.  TEST_OUTPUT and LOAD_OUTPUT used to be spelled independently of
+# OUTPUT_DIR — they predate it — so `OUTPUT_DIR=/tmp/x- make test` WROTE
+# /tmp/x-test-LATEST.txt and JUDGED /tmp/<system>-test-LATEST.txt: whatever the
+# previous run left there.  Measured 2026-11-22: a render-parity run with five
+# tests that failed to evaluate came back `=== VERDICT: PASS`, because the one
+# check designed to catch that class was reading a file the run did not write.
+# `load` had the same shape — capture-output wrote the OUTPUT_DIR name while
+# load-verdict.sh was handed the old one.
+# Deriving all of them from OUTPUT_DIR makes setting it move the write and the
+# read together, which is what anyone setting it was already assuming.
+TEST_OUTPUT ?= $(OUTPUT_DIR)test-LATEST.txt
+LOAD_OUTPUT ?= $(OUTPUT_DIR)load-LATEST.txt
 # Logs for the two targets that do not follow the TEST_OUTPUT name.  Must
 # match what capture-output writes, or the verdict reads a stale file.
 TEST_PACKAGE_OUTPUT ?= $(OUTPUT_DIR)test-package-LATEST.txt
 TEST_EVAL_OUTPUT ?= $(OUTPUT_DIR)test-eval-LATEST.txt
-# Temp file for $(file ...) output — avoids shell quoting issues with --eval
-TEST_EVAL_TMP ?= /tmp/$(subst /,-,$(PROJECT_SYSTEM))-test-eval-tmp.lisp
+# Temp file for $(file ...) output — avoids shell quoting issues with --eval.
+# Derived from OUTPUT_DIR for the same reason: two agents working in different
+# OUTPUT_DIRs were still sharing this one path, so one could load the other's
+# form (bd-235).
+TEST_EVAL_TMP ?= $(OUTPUT_DIR)test-eval-tmp.lisp
 
 SBCL ?= sbcl
 SBCL_HOME ?=

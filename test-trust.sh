@@ -23,6 +23,12 @@
 #                      no-test-system marker absent from the
 #                      backtrace that echoes the guard's own
 #                      source (bd-829)
+#   OUTPUT_DIR decoy   the failing fixture run with
+#                      OUTPUT_DIR=<scratch> while a GREEN log
+#                      sits at the shared path: the verdict
+#                      must judge the file this run wrote and
+#                      say FAIL (bd-235 — it used to read the
+#                      decoy and say PASS)
 #   synthetic logs     one gate at a time (counted failure,
 #                      ✘, Failures block, no summary, bad
 #                      command exit, missing log)            -> each FAIL
@@ -90,7 +96,7 @@ verdict_is_last() {
 echo "== test-trust: fixtures under $FIXTURES =="
 
 # ── 1. A genuinely green suite: PASS, exit 0 ──────────────────────────────
-echo "[1/8] verdict-pass / make test — must PASS"
+echo "[1/9] verdict-pass / make test — must PASS"
 LOG=$(log_for "$FIXTURES/verdict-pass" test)
 run_make "$FIXTURES/verdict-pass" test
 check "verdict-pass: make test exits 0"                      "$(is "$RC")"
@@ -98,7 +104,7 @@ check "verdict-pass: log says PASS"                          "$(is "$(verdict_is
 check "verdict-pass: the verdict line is the log's last line" "$(is "$(verdict_is_last "$LOG"; echo $?)")"
 
 # ── 2. Only failure is a test that failed to evaluate: FAIL, exit != 0 ────
-echo "[2/8] verdict-eval-fail / make test — must FAIL"
+echo "[2/9] verdict-eval-fail / make test — must FAIL"
 LOG=$(log_for "$FIXTURES/verdict-eval-fail" test)
 run_make "$FIXTURES/verdict-eval-fail" test
 check "verdict-eval-fail: make test exits non-zero"          "$(is "$([ "$RC" -ne 0 ] && echo 0 || echo 1)")"
@@ -109,7 +115,7 @@ check "verdict-eval-fail: parachute's counters still lie (Failed: 0)"      "$(is
 check "verdict-eval-fail: the verdict names the real reason" "$(is "$(grep -q 'failed to evaluate properly' "$LOG" && grep -q '^=== VERDICT reasons ===' "$LOG"; echo $?)")"
 
 # ── 3. A suite that never ran: FAIL, exit != 0 ────────────────────────────
-echo "[3/8] verdict-no-suite / make test — must FAIL"
+echo "[3/9] verdict-no-suite / make test — must FAIL"
 LOG=$(log_for "$FIXTURES/verdict-no-suite" test)
 run_make "$FIXTURES/verdict-no-suite" test
 check "verdict-no-suite: make test exits non-zero"           "$(is "$([ "$RC" -ne 0 ] && echo 0 || echo 1)")"
@@ -118,7 +124,7 @@ check "verdict-no-suite: the verdict names the missing suite" "$(is "$(grep -q '
 check "verdict-no-suite: nothing in the log claims success"  "$(is "$(grep -qE '=== Exit: 0|VERDICT: PASS' "$LOG" && echo 1 || echo 0)")"
 
 # ── 4. test-package: same trap, direct parachute call ─────────────────────
-echo "[4/8] verdict-eval-fail / make test-package — must FAIL in the log"
+echo "[4/9] verdict-eval-fail / make test-package — must FAIL in the log"
 LOG=$(log_for "$FIXTURES/verdict-eval-fail" test-package)
 run_make "$FIXTURES/verdict-eval-fail" test-package PKG=":verdict-eval-fail/tests"
 check "test-package: exits non-zero"                         "$(is "$([ "$RC" -ne 0 ] && echo 0 || echo 1)")"
@@ -126,7 +132,7 @@ check "test-package: log says FAIL"                          "$(is "$(verdict_is
 check "test-package: the verdict line is the log's last line" "$(is "$(verdict_is_last "$LOG"; echo $?)")"
 
 # ── 5. test-eval: arbitrary form, no summary required ─────────────────────
-echo "[5/8] verdict-pass / make test-eval — must PASS without a summary"
+echo "[5/9] verdict-pass / make test-eval — must PASS without a summary"
 LOG=$(log_for "$FIXTURES/verdict-pass" test-eval)
 run_make "$FIXTURES/verdict-pass" test-eval 'EVAL=(format t "~&trivial form ran.~%")'
 check "test-eval: exits 0"                                   "$(is "$RC")"
@@ -145,7 +151,7 @@ check "test-eval: a dollar name in the form reaches Lisp intact" \
 # The trap (bd-wf7): `test` force-loads $(TEST_SYSTEM), the load signals
 # SYSTEM-NOT-FOUND, nothing runs, and the verdict says FAIL with "no test
 # summary in the log". A red gate no change to the code can turn green.
-echo "[6/8] no-test-system / make test — must say so and exit 0"
+echo "[6/9] no-test-system / make test — must say so and exit 0"
 LOG=$(log_for "$FIXTURES/no-test-system" test)
 run_make "$FIXTURES/no-test-system" test
 check "no-test-system: make test exits 0"                    "$(is "$RC")"
@@ -190,7 +196,7 @@ check "no-test-system: test-summary says the same, not 'run make test first'" \
 #
 # The log is anchored at column 0 on purpose: a backtrace frame is indented and
 # wraps the source text mid-line, so "the log mentions X" is never a test.
-echo "[7/8] verdict-broken-build / make test — must be RED and unjudged"
+echo "[7/9] verdict-broken-build / make test — must be RED and unjudged"
 LOG=$(log_for "$FIXTURES/verdict-broken-build" test)
 (cd "$FIXTURES/verdict-broken-build" && make cache-clean SBCL="$SBCL_BIN" QL="$QL_PATH") >/dev/null 2>&1
 run_make "$FIXTURES/verdict-broken-build" test
@@ -218,8 +224,38 @@ if [ -s "$SECOND_OUT" ] && ! grep -qF 'cached (' "$SECOND_OUT"; then NO_HIT=0; e
 check "broken-build: ...and it executed instead of answering 'cached'" \
       "$(is "$NO_HIT")"
 
-# ── 8. The verdict script's own gates, on synthetic logs ──────────────────
-echo "[8/8] test-verdict.sh — one gate at a time, no Lisp involved"
+# ── 8. OUTPUT_DIR moves the WRITE and the JUDGE together (bd-235) ─────────
+# The incident, measured 2026-11-22 in render-parity: `OUTPUT_DIR=/tmp/x- make
+# test` captured its log under /tmp/x- and handed test-verdict.sh the SHARED
+# /tmp/<system>-test-LATEST.txt.  That file held the PREVIOUS run's green log,
+# so five tests that failed to evaluate reported `=== VERDICT: PASS`.  A false
+# green, printed by the one check that exists to prevent false greens.
+#
+# The decoy is the whole check: seed the shared path with a green log, then run
+# a fixture whose suite really is red with OUTPUT_DIR pointing at a scratch
+# directory.  Under the old wiring the verdict read the decoy; now it must read
+# the file it wrote, and the verdict line itself names that file.
+echo "[8/9] bd-235: OUTPUT_DIR moves the log AND the verdict"
+DECOY=$(log_for "$FIXTURES/verdict-eval-fail" test)
+printf '=== decoy: a GREEN log from an earlier run ===\n;; Summary:\nPassed:     1\nFailed:     0\nSkipped:    0\n=== VERDICT: PASS (target: test, log: %s) ===\n' "$DECOY" >"$DECOY"
+OUTDIR=$(mktemp -d /tmp/test-trust-outdir.XXXXXX)
+OUT_LOG="$OUTDIR/test-LATEST.txt"
+run_make "$FIXTURES/verdict-eval-fail" test OUTPUT_DIR="$OUTDIR/"
+check "bd-235: OUTPUT_DIR is where the log landed" \
+      "$(is "$([ -s "$OUT_LOG" ] && echo 0 || echo 1)")"
+check "bd-235: the verdict names the file this run wrote" \
+      "$(is "$(tail -1 "$OUT_LOG" | grep -qF "log: $OUT_LOG)" && echo 0 || echo 1)")"
+check "bd-235: ...and it says FAIL, not the decoy's PASS" \
+      "$(is "$(verdict_is "$OUT_LOG" FAIL; echo $?)")"
+check "bd-235: make test still exits non-zero" \
+      "$(is "$([ "$RC" -ne 0 ] && echo 0 || echo 1)")"
+# A fake PASS parked at the shared path would lie to the next `make test-summary`
+# run from that fixture, so remove the decoy once it has done its job.
+rm -f "$DECOY"
+rm -rf "$OUTDIR"
+
+# ── 9. The verdict script's own gates, on synthetic logs ──────────────────
+echo "[9/9] test-verdict.sh — one gate at a time, no Lisp involved"
 SYNTH=$(mktemp -d /tmp/test-trust-synth.XXXXXX)
 GREEN="=== x ===
 ;; Summary:

@@ -238,6 +238,17 @@ Standard targets =load=, =force-load=, and =test= use =capture-output= internall
 =load-summary= and =test-summary= read from =$(LOAD_OUTPUT)= and =$(TEST_OUTPUT)=,
 which are derived from =$(OUTPUT_DIR)=.
 
+**Every log that is written and then JUDGED is derived that way** — =TEST_OUTPUT=,
+=LOAD_OUTPUT=, =TEST_EVAL_OUTPUT=, =TEST_PACKAGE_OUTPUT=, and =TEST_EVAL_TMP= — so
+setting =OUTPUT_DIR= moves the write and the read together.  That is not cosmetic:
+until bd-235 those two names were spelled independently, so
+=OUTPUT_DIR=/tmp/x- make test= wrote =/tmp/x-test-LATEST.txt= and handed the verdict
+the shared =/tmp/<system>-test-LATEST.txt= instead.  If the shared file held a green
+log from an earlier run, a suite whose tests failed to evaluate reported
+=PASS= — a false green from the one check that exists to prevent false greens.
+=load= had the same shape.  A new judged log belongs in that list, not in a fresh
+=/tmp= path.
+
 ** The Load Verdict — four targets, one predicate (bd-t5m)
 
 =make load=, =make fast-load=, =make force-load= and =make fast-force-load=

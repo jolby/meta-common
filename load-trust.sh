@@ -93,6 +93,20 @@ check "cl-project.mk no longer inlines the blind predicate" \
       "$(is "$(grep -q 'caught (fatal )?(ERROR|WARNING)' "$CL_MK_DIR/cl-project.mk" && echo 1 || echo 0)")"
 check "cl-project.mk calls load-verdict.sh from every load target" \
       "$(is "$([ "$(grep -c 'LOAD_VERDICT_SH' "$CL_MK_DIR/cl-project.mk")" -ge 5 ] && echo 0 || echo 1)")"
+# bd-235.  `load` WROTE $(OUTPUT_DIR)load-LATEST.txt and JUDGED LOAD_OUTPUT,
+# which was spelled /tmp/<system>-load-LATEST.txt — so with OUTPUT_DIR set the
+# verdict read whatever the previous run had left there, and could pass a load
+# that emitted warnings.  A make-level check, because the bug was in the wiring:
+# no SBCL run can distinguish "the verdict is right" from "the verdict read the
+# right file" when both files hold the same text.
+# Captured to a file first: `make -pn | grep -q` reads make's 141 (grep matched
+# early and closed the pipe) instead of grep's 0, and pipefail makes that the
+# pipeline's status.
+LOAD_PROBE=$(mktemp /tmp/load-trust-probe.XXXXXX)
+(cd "$FIXTURES/load-undefined" && make -pn OUTPUT_DIR=/tmp/load-trust-probe- 2>/dev/null) >"$LOAD_PROBE"
+check "bd-235: LOAD_OUTPUT is derived from OUTPUT_DIR (write = read)" \
+      "$(is "$(grep -qE '^LOAD_OUTPUT = \$\(OUTPUT_DIR\)load-LATEST\.txt$' "$LOAD_PROBE" && echo 0 || echo 1)")"
+rm -f "$LOAD_PROBE"
 
 # ── 1. Style-warnings only: PASS, and the warning is visible ──────────────
 echo "[1/4] load-style-warning / make force-load — must PASS despite a style-warning"
